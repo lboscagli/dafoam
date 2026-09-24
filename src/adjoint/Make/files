@@ -87,6 +87,7 @@ DAStateInfo/DAStateInfoSimpleFoam.C
 DAStateInfo/DAStateInfoPimpleFoam.C
 DAStateInfo/DAStateInfoPimpleDyMFoam.C
 DAStateInfo/DAStateInfoRhoPimpleFoam.C
+DAStateInfo/DAStateInfoContrailFoam.C
 DAStateInfo/DAStateInfoRhoSimpleFoam.C
 DAStateInfo/DAStateInfoRhoSimpleCFoam.C
 DAStateInfo/DAStateInfoTurboFoam.C
