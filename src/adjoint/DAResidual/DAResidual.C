@@ -40,26 +40,49 @@ DAResidual::DAResidual(
       daIndex_(daIndex),
       daField_(mesh, daOption, daModel, daIndex)
 {
-    // get molWeight and Cp from thermophysicalProperties
+    // Read the constant-property values used by legacy single-component
+    // compressible residuals. Multicomponent solvers such as DAContrailFoam
+    // obtain thermodynamic and transport quantities from their runtime thermo
+    // model and therefore do not use these values.
+    molWeight_ = 0.0;
+    Cp_ = 0.0;
+    As_ = 0.0;
+    Ts_ = 0.0;
+    transportType_ = "none";
+
     if (mesh.thisDb().foundObject<IOdictionary>("thermophysicalProperties"))
     {
-        const IOdictionary& thermoDict = mesh.thisDb().lookupObject<IOdictionary>("thermophysicalProperties");
-        dictionary mixSubDict = thermoDict.subDict("mixture");
-        dictionary specieSubDict = mixSubDict.subDict("specie");
-        molWeight_ = specieSubDict.getScalar("molWeight");
-        dictionary thermodynamicsSubDict = mixSubDict.subDict("thermodynamics");
-        Cp_ = thermodynamicsSubDict.getScalar("Cp");
-        transportType_ = thermoDict.subDict("thermoType").getWord("transport");
-        if (transportType_ == "sutherland")
-        {
-            As_ = mixSubDict.subDict("transport").getScalar("As");
-            Ts_ = mixSubDict.subDict("transport").getScalar("Ts");
-        }
+        const IOdictionary& thermoDict =
+            mesh.thisDb().lookupObject<IOdictionary>("thermophysicalProperties");
 
-        if (daOption_.getOption<label>("debug"))
+        if (thermoDict.found("mixture"))
         {
-            Info << "molWeight " << molWeight_ << endl;
-            Info << "Cp " << Cp_ << endl;
+            const dictionary& mixSubDict = thermoDict.subDict("mixture");
+            const dictionary& specieSubDict = mixSubDict.subDict("specie");
+            const dictionary& thermodynamicsSubDict =
+                mixSubDict.subDict("thermodynamics");
+
+            molWeight_ = specieSubDict.getScalar("molWeight");
+            Cp_ = thermodynamicsSubDict.getScalar("Cp");
+            transportType_ = thermoDict.subDict("thermoType").getWord("transport");
+
+            if (transportType_ == "sutherland")
+            {
+                const dictionary& transportSubDict = mixSubDict.subDict("transport");
+                As_ = transportSubDict.getScalar("As");
+                Ts_ = transportSubDict.getScalar("Ts");
+            }
+
+            if (daOption_.getOption<label>("debug"))
+            {
+                Info << "molWeight " << molWeight_ << endl;
+                Info << "Cp " << Cp_ << endl;
+            }
+        }
+        else if (daOption_.getOption<label>("debug"))
+        {
+            Info << "Skipping legacy single-component thermo-property parsing"
+                << " for multicomponent thermophysicalProperties." << endl;
         }
     }
 }
