@@ -75,7 +75,12 @@ DATurbulenceModel::DATurbulenceModel(
               IOobject::MUST_READ,
               IOobject::NO_WRITE,
               false)),
-      coeffDict_(turbDict_.subDict("RAS")),
+      coeffDict_(
+          turbDict_.found("RAS")
+              ? turbDict_.subDict("RAS")
+              : (turbDict_.found("LES")
+                     ? turbDict_.subDict("LES")
+                     : turbDict_.subDict("RAS"))),
       kMin_(dimensioned<scalar>::lookupOrAddToDict(
           "kMin",
           coeffDict_,
@@ -150,8 +155,23 @@ DATurbulenceModel::DATurbulenceModel(
         if (mesh_.thisDb().foundObject<volScalarField>("alphat"))
         {
             const IOdictionary& turbDict = mesh_.thisDb().lookupObject<IOdictionary>("turbulenceProperties");
-            dictionary rasSubDict = turbDict.subDict("RAS");
-            Prt_ = rasSubDict.getScalar("Prt");
+
+            if (turbDict.found("RAS"))
+            {
+                dictionary rasSubDict = turbDict.subDict("RAS");
+                if (rasSubDict.found("Prt"))
+                {
+                    Prt_ = rasSubDict.getScalar("Prt");
+                }
+            }
+            else if (turbDict.found("LES"))
+            {
+                dictionary lesSubDict = turbDict.subDict("LES");
+                if (lesSubDict.found("Prt"))
+                {
+                    Prt_ = lesSubDict.getScalar("Prt");
+                }
+            }
         }
     }
 }

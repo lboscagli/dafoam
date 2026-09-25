@@ -71,6 +71,7 @@ DAOutput/DAOutputForceCoupling.C
 
 DAModel/DAModel.C
 DAModel/DATurbulenceModel/DATurbulenceModel.C
+DAModel/DATurbulenceModel/DADynamicKEqn.C
 DAModel/DATurbulenceModel/DASpalartAllmaras.C
 DAModel/DATurbulenceModel/DASpalartAllmarasFv3.C
 DAModel/DATurbulenceModel/DAkOmegaSST.C
