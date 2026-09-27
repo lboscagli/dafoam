@@ -149,9 +149,19 @@ DATurbulenceModel::DATurbulenceModel(
                 IOobject::MUST_READ,
                 IOobject::NO_WRITE,
                 false));
-        Pr_ = readScalar(
-            thermophysicalProperties.subDict("mixture").subDict("transport").lookup("Pr"));
+        Pr_ = 1.0;
 
+        // multicomponent thermodynamics obtains molecular thermal transport from the
+        // runtime thermo model and does not provide the legacy single-mixture Pr entry.
+
+        if (thermophysicalProperties.found("mixture"))
+        {
+            Pr_ = readScalar(
+                thermophysicalProperties
+                    .subDict("mixture")
+                    .subDict("transport")
+                    .lookup("Pr"));
+        }
         if (mesh_.thisDb().foundObject<volScalarField>("alphat"))
         {
             const IOdictionary& turbDict = mesh_.thisDb().lookupObject<IOdictionary>("turbulenceProperties");
@@ -166,11 +176,8 @@ DATurbulenceModel::DATurbulenceModel(
             }
             else if (turbDict.found("LES"))
             {
-                dictionary lesSubDict = turbDict.subDict("LES");
-                if (lesSubDict.found("Prt"))
-                {
-                    Prt_ = lesSubDict.getScalar("Prt");
-                }
+                const dictionary& lesSubDict = turbDict.subDict("LES");
+                Prt_ = lesSubDict.getOrDefault<scalar>("Prt", 1.0);
             }
         }
     }

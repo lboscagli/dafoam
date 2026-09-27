@@ -6,8 +6,8 @@
 \*---------------------------------------------------------------------------*/
 
 #include "DADynamicKEqn.H"
-
-// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+#include "bound.H"
+#include "fvOptions.H"
 
 namespace Foam
 {
@@ -19,31 +19,32 @@ volScalarField DADynamicKEqn::Ck(
     const volSymmTensorField& D,
     const volScalarField& KK) const
 {
-    volScalarField deltaField(
-        IOobject(
-            "delta",
-            mesh_.time().timeName(),
-            mesh_,
-            IOobject::NO_READ,
-            IOobject::NO_WRITE),
-        mesh_,
-        dimensionedScalar("delta", dimless, 0.0));
-    deltaField.primitiveFieldRef() = cbrt(mesh_.V());
+    const volSymmTensorField LL
+    (
+        simpleFilter_(dev(filter_(sqr(U_)) - sqr(filter_(U_))))
+    );
 
-    const volSymmTensorField LL(
-        simpleFilter_(dev(filter_(sqr(U_)) - sqr(filter_(U_)))));
+    const volSymmTensorField MM
+    (
+        simpleFilter_
+        (
+            -2.0*delta_
+           *sqrt(max(KK, dimensionedScalar(KK.dimensions(), Zero)))
+           *filter_(D)
+        )
+    );
 
-    const volSymmTensorField MM(
-        simpleFilter_(
-            -2.0 * deltaField * sqrt(max(KK, dimensionedScalar(KK.dimensions(), Zero)))
-                * filter_(D)));
+    const volScalarField CkField
+    (
+        simpleFilter_(0.5*(LL && MM))
+       /
+        (
+            simpleFilter_(magSqr(MM))
+          + dimensionedScalar("small", sqr(MM.dimensions()), VSMALL)
+        )
+    );
 
-    const volScalarField CkField(
-        simpleFilter_(0.5 * (LL && MM))
-            / (simpleFilter_(magSqr(MM))
-               + dimensionedScalar("small", sqr(MM.dimensions()), VSMALL)));
-
-    tmp<volScalarField> tfld = 0.5 * (mag(CkField) + CkField);
+    tmp<volScalarField> tfld = 0.5*(mag(CkField) + CkField);
     return tfld();
 }
 
@@ -51,22 +52,16 @@ volScalarField DADynamicKEqn::Ce(
     const volSymmTensorField& D,
     const volScalarField& KK) const
 {
-    volScalarField deltaField(
-        IOobject(
-            "delta",
-            mesh_.time().timeName(),
-            mesh_,
-            IOobject::NO_READ,
-            IOobject::NO_WRITE),
-        mesh_,
-        dimensionedScalar("delta", dimless, 0.0));
-    deltaField.primitiveFieldRef() = cbrt(mesh_.V());
+    const volScalarField CeField
+    (
+        simpleFilter_
+        (
+            nuEff()*(filter_(magSqr(D)) - magSqr(filter_(D)))
+        )
+       /simpleFilter_(pow(KK, 1.5)/(2.0*delta_))
+    );
 
-    const volScalarField CeField(
-        simpleFilter_(nuEff() * (filter_(magSqr(D)) - magSqr(filter_(D))))
-            / simpleFilter_(pow(KK, 1.5) / (2.0 * deltaField)));
-
-    tmp<volScalarField> tfld = 0.5 * (mag(CeField) + CeField);
+    tmp<volScalarField> tfld = 0.5*(mag(CeField) + CeField);
     return tfld();
 }
 
@@ -74,8 +69,10 @@ volScalarField DADynamicKEqn::Ce() const
 {
     const volSymmTensorField D(devSymm(fvc::grad(U_)));
 
-    volScalarField KK(
-        0.5 * (filter_(magSqr(U_)) - magSqr(filter_(U_))));
+    volScalarField KK
+    (
+        0.5*(filter_(magSqr(U_)) - magSqr(filter_(U_)))
+    );
     KK.clamp_min(SMALL);
 
     return Ce(D, KK);
@@ -85,22 +82,24 @@ void DADynamicKEqn::correctNut(
     const volSymmTensorField& D,
     const volScalarField& KK)
 {
-    volScalarField deltaField(
-        IOobject(
-            "delta",
-            mesh_.time().timeName(),
-            mesh_,
-            IOobject::NO_READ,
-            IOobject::NO_WRITE),
-        mesh_,
-        dimensionedScalar("delta", dimless, 0.0));
-    deltaField.primitiveFieldRef() = cbrt(mesh_.V());
-
-    nut_ = Ck(D, KK) * sqrt(max(k_, dimensionedScalar(k_.dimensions(), SMALL)))
-        * deltaField;
+    // Matches OpenFOAM v2506 dynamicKEqn::correctNut().
+    nut_ = Ck(D, KK)*sqrt(k_)*delta_;
     nut_.correctBoundaryConditions();
 
+    fv::options::New(mesh_).correct(nut_);
+
+    // DATurbulenceModel::correctAlphat must use the OpenFOAM-compatible LES
+    // default Prt = 1.0 when the LES dictionary omits Prt.
     this->correctAlphat();
+}
+
+tmp<fvScalarMatrix> DADynamicKEqn::kSource() const
+{
+    return tmp<fvScalarMatrix>::New
+    (
+        k_,
+        dimVolume*this->rhoDimensions()*k_.dimensions()/dimTime
+    );
 }
 
 DADynamicKEqn::DADynamicKEqn(
@@ -110,12 +109,45 @@ DADynamicKEqn::DADynamicKEqn(
     : DATurbulenceModel(modelType, mesh, daOption),
       k_(const_cast<volScalarField&>(
           mesh.thisDb().lookupObject<volScalarField>("k"))),
+      kRes_
+      (
+          IOobject
+          (
+              "kRes",
+              mesh.time().timeName(),
+              mesh,
+              IOobject::NO_READ,
+              IOobject::NO_WRITE
+          ),
+          mesh,
+          dimensionedScalar("kRes", dimless, 0.0),
+          zeroGradientFvPatchField<scalar>::typeName
+      ),
+      lesModel_(refCast<const compressible::LESModel>(
+          mesh.thisDb().lookupObject<compressible::turbulenceModel>(
+              compressible::turbulenceModel::propertiesName))),
+      delta_(lesModel_.delta()),
       simpleFilter_(mesh),
-      filterPtr_(LESfilter::New(mesh, coeffDict_)),
+      filterPtr_(
+        LESfilter::New
+        (
+            mesh,
+            turbDict_.subDict("LES").subDict("dynamicKEqnCoeffs")
+        )
+      ),
       filter_(filterPtr_())
 {
-}
+    if (turbModelType_ != "compressible")
+    {
+        FatalErrorInFunction
+            << "DADynamicKEqn currently supports compressible LES only."
+            << exit(FatalError);
+    }
 
+    kRes_.dimensions().reset(
+        dimVolume*rhoDimensions()*k_.dimensions()/dimTime
+    );
+}
 
 void DADynamicKEqn::correctModelStates(wordList& modelStates) const
 {
@@ -130,8 +162,10 @@ void DADynamicKEqn::correctModelStates(wordList& modelStates) const
 
 void DADynamicKEqn::correctNut()
 {
-    const volScalarField KK(
-        0.5 * (filter_(magSqr(U_)) - magSqr(filter_(U_))));
+    const volScalarField KK
+    (
+        0.5*(filter_(magSqr(U_)) - magSqr(filter_(U_)))
+    );
 
     correctNut(symm(fvc::grad(U_)), KK);
 }
@@ -139,12 +173,7 @@ void DADynamicKEqn::correctNut()
 void DADynamicKEqn::correctBoundaryConditions()
 {
     k_.correctBoundaryConditions();
-    nut_.correctBoundaryConditions();
-
-    if (mesh_.thisDb().foundObject<volScalarField>("alphat"))
-    {
-        this->correctAlphat();
-    }
+    this->correctNut();
 }
 
 void DADynamicKEqn::updateIntermediateVariables()
@@ -152,7 +181,8 @@ void DADynamicKEqn::updateIntermediateVariables()
     this->correctNut();
 }
 
-void DADynamicKEqn::correctStateResidualModelCon(List<List<word>>& stateCon) const
+void DADynamicKEqn::correctStateResidualModelCon(
+    List<List<word>>& stateCon) const
 {
     forAll(stateCon, idxI)
     {
@@ -166,49 +196,103 @@ void DADynamicKEqn::correctStateResidualModelCon(List<List<word>>& stateCon) con
     }
 }
 
-void DADynamicKEqn::addModelResidualCon(HashTable<List<List<word>>>& allCon) const
+void DADynamicKEqn::addModelResidualCon(
+    HashTable<List<List<word>>>& allCon) const
 {
-    word pName = "p";
-    if (!mesh_.thisDb().foundObject<volScalarField>("p"))
-    {
-        pName = "p_rgh";
-    }
+    const word pName = mesh_.thisDb().foundObject<volScalarField>("p")
+        ? word("p")
+        : word("p_rgh");
 
-    if (turbModelType_ == "incompressible")
-    {
-        allCon.set(
-            "kRes",
-            {
-                {"U", "k", "phi"},
-                {"U", "k"},
-                {"U", "k"}
-            });
-    }
-    else
-    {
-        allCon.set(
-            "kRes",
-            {
-                {"U", "T", pName, "k", "phi"},
-                {"U", "T", pName, "k"},
-                {"U", "T", pName, "k"}
-            });
-    }
+    allCon.set(
+        "kRes",
+        {
+            {"U", "T", pName, "k", "phi"},
+            {"U", "T", pName, "k"},
+            {"U", "T", pName, "k"}
+        }
+    );
 }
 
 void DADynamicKEqn::correct(label printToScreen)
 {
-    this->correctNut();
+    solveTurbState_ = 1;
+
+    dictionary options;
+    options.set("printToScreen", printToScreen);
+    this->calcResiduals(options);
+
+    solveTurbState_ = 0;
 }
 
 void DADynamicKEqn::calcResiduals(const dictionary& options)
 {
-    // The minimal prerequisite implementation keeps the dynamicKEqn residual path
-    // unimplemented until the actual LES turbulence model is fully wired into the
-    // DAFoam solver flow. This registration is enough to expose the model and allow
-    // DAFoam to select it in original mode.
+    word divKScheme = "div(phi,k)";
+    label isPC = 0;
+    const label printToScreen = options.lookupOrDefault<label>("printToScreen", 0);
+
+    if (!solveTurbState_)
+    {
+        isPC = options.getLabel("isPC");
+        if (isPC)
+        {
+            divKScheme = "div(pc)";
+        }
+    }
+
+    const volScalarField rho(this->rho());
+
+    const volScalarField divU
+    (
+        fvc::div(fvc::absolute(phi_/fvc::interpolate(rho), U_))
+    );
+
+    tmp<volTensorField> tgradU(fvc::grad(U_));
+    const volSymmTensorField D(devSymm(tgradU()));
+    const volScalarField G(2.0*nut_*(tgradU() && D));
+    tgradU.clear();
+
+    volScalarField KK
+    (
+        0.5*(filter_(magSqr(U_)) - magSqr(filter_(U_)))
+    );
+    KK.clamp_min(SMALL);
+
+    fv::options& fvOptions(fv::options::New(mesh_));
+
+    tmp<fvScalarMatrix> tkEqn
+    (
+        fvm::ddt(phase_, rho, k_)
+      + fvm::div(phaseRhoPhi_, k_, divKScheme)
+      - fvm::laplacian(phase_*rho*nuEff(), k_)
+     ==
+        phase_*rho*G
+      - fvm::SuSp((2.0/3.0)*phase_*rho*divU, k_)
+      - fvm::Sp(Ce(D, KK)*phase_*rho*sqrt(k_)/delta_, k_)
+      + kSource()
+      + fvOptions(phase_, rho, k_)
+    );
+
+    fvScalarMatrix& kEqn = tkEqn.ref();
+    kEqn.relax();
+    fvOptions.constrain(kEqn);
+
+    if (solveTurbState_)
+    {
+        SolverPerformance<scalar> solverK = solve(kEqn);
+        DAUtility::primalResidualControl(
+            solverK, printToScreen, "k", daGlobalVar_.primalMaxRes
+        );
+
+        fvOptions.correct(k_);
+        bound(k_, kMin_);
+        correctNut(D, KK);
+    }
+    else
+    {
+        kRes_ = kEqn & k_;
+        normalizeResiduals(kRes);
+    }
 }
-// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 } // End namespace Foam
 
