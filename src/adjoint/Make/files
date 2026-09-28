@@ -104,6 +104,7 @@ DAResidual/DAResidualSimpleFoam.C
 DAResidual/DAResidualPimpleFoam.C
 DAResidual/DAResidualPimpleDyMFoam.C
 DAResidual/DAResidualRhoPimpleFoam.C
+DAResidual/DAResidualContrailFoam.C
 DAResidual/DAResidualRhoSimpleFoam.C
 DAResidual/DAResidualRhoSimpleCFoam.C
 DAResidual/DAResidualTurboFoam.C
