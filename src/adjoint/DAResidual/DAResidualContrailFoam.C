@@ -102,7 +102,7 @@ void DAResidualContrailFoam::clear()
     H2ORes_.clear();
 }
 
-void DAResidualContrailFoam::calcResiduals(const dictionary&)
+void DAResidualContrailFoam::calcResiduals(const dictionary& options)
 {
     /*
     Description:
@@ -117,9 +117,247 @@ void DAResidualContrailFoam::calcResiduals(const dictionary&)
     Output:
         URes_, pRes_, TRes_, phiRes_, etc: residual field variables
     */    
-    FatalErrorInFunction
-        << "DAResidualContrailFoam residual evaluation is not implemented yet."
-        << exit(FatalError);
+    const label isPC = options.getLabel("isPC");
+    const word divUScheme = isPC ? word("div(pc)") : word("div(phi,U)");
+    const word divHEScheme = isPC
+        ? word("div(pc)")
+        : (he_.name() == "h" ? word("div(phi,h)") : word("div(phi,e)"));
+
+    // The standalone CASSANDRA case and first DAFoam milestone use the
+    // non-transonic pressure branch.
+    if (pimple_.transonic())
+    {
+        FatalErrorInFunction
+            << "DAResidualContrailFoam does not support the transonic "
+            << "pressure-residual branch yet."
+            << exit(FatalError);
+    }
+
+    // Momentum residual: CASSANDRA UEqn.H with no PBE-related source terms.
+    tmp<fvVectorMatrix> tUEqn
+    (
+        fvm::ddt(rho_, U_)
+      + fvm::div(phi_, U_, divUScheme)
+      + MRF_.DDt(rho_, U_)
+      + turbulence_.divDevRhoReff(U_)
+     ==
+        fvOptions_(rho_, U_)
+    );
+    fvVectorMatrix& UEqn = tUEqn.ref();
+    UEqn.relax(1.0);
+    fvOptions_.constrain(UEqn);
+
+    URes_ = (UEqn & U_) + fvc::grad(p_);
+    normalizeResiduals(URes);
+
+    // Match the standalone multivariate convection table for active species
+    // and sensible enthalpy. N2 is derived and not an independent residual.
+    multivariateSurfaceInterpolationScheme<scalar>::fieldTable fields;
+    forAll(Y_, speciesI)
+    {
+        fields.add(Y_[speciesI]);
+    }
+    fields.add(he_);
+
+    tmp<fv::convectionScheme<scalar>> mvConvection
+    (
+        fv::convectionScheme<scalar>::New
+        (
+            mesh_,
+            fields,
+            phi_,
+            mesh_.divScheme("div(phi,Yi_h)")
+        )
+    );
+
+    // In preconditioner mode use the established first-order PC scheme. In
+    // normal residual mode, preserve CASSANDRA's multivariate discretisation.
+    tmp<fvScalarMatrix> tO2Eqn
+    (
+        isPC
+        ? tmp<fvScalarMatrix>
+          (
+              new fvScalarMatrix
+              (
+                  fvm::ddt(rho_, O2_)
+                + fvm::div(phi_, O2_, "div(pc)")
+                - fvm::laplacian(turbulence_.muEff()/Sc_, O2_)
+               ==
+                  fvOptions_(rho_, O2_)
+              )
+          )
+        : tmp<fvScalarMatrix>
+          (
+              new fvScalarMatrix
+              (
+                  fvm::ddt(rho_, O2_)
+                + mvConvection->fvmDiv(phi_, O2_)
+                - fvm::laplacian(turbulence_.muEff()/Sc_, O2_)
+               ==
+                  fvOptions_(rho_, O2_)
+              )
+          )
+    );
+    fvScalarMatrix& O2Eqn = tO2Eqn.ref();
+    O2Eqn.relax(1.0);
+    fvOptions_.constrain(O2Eqn);
+    O2Res_ = O2Eqn & O2_;
+    normalizeResiduals(O2Res);
+
+    tmp<fvScalarMatrix> tCO2Eqn
+    (
+        isPC
+        ? tmp<fvScalarMatrix>
+          (
+              new fvScalarMatrix
+              (
+                  fvm::ddt(rho_, CO2_)
+                + fvm::div(phi_, CO2_, "div(pc)")
+                - fvm::laplacian(turbulence_.muEff()/Sc_, CO2_)
+               ==
+                  fvOptions_(rho_, CO2_)
+              )
+          )
+        : tmp<fvScalarMatrix>
+          (
+              new fvScalarMatrix
+              (
+                  fvm::ddt(rho_, CO2_)
+                + mvConvection->fvmDiv(phi_, CO2_)
+                - fvm::laplacian(turbulence_.muEff()/Sc_, CO2_)
+               ==
+                  fvOptions_(rho_, CO2_)
+              )
+          )
+    );
+    fvScalarMatrix& CO2Eqn = tCO2Eqn.ref();
+    CO2Eqn.relax(1.0);
+    fvOptions_.constrain(CO2Eqn);
+    CO2Res_ = CO2Eqn & CO2_;
+    normalizeResiduals(CO2Res);
+
+    tmp<fvScalarMatrix> tH2OEqn
+    (
+        isPC
+        ? tmp<fvScalarMatrix>
+          (
+              new fvScalarMatrix
+              (
+                  fvm::ddt(rho_, H2O_)
+                + fvm::div(phi_, H2O_, "div(pc)")
+                - fvm::laplacian(turbulence_.muEff()/Sc_, H2O_)
+               ==
+                  fvOptions_(rho_, H2O_)
+              )
+          )
+        : tmp<fvScalarMatrix>
+          (
+              new fvScalarMatrix
+              (
+                  fvm::ddt(rho_, H2O_)
+                + mvConvection->fvmDiv(phi_, H2O_)
+                - fvm::laplacian(turbulence_.muEff()/Sc_, H2O_)
+               ==
+                  fvOptions_(rho_, H2O_)
+              )
+          )
+    );
+    fvScalarMatrix& H2OEqn = tH2OEqn.ref();
+    H2OEqn.relax(1.0);
+    fvOptions_.constrain(H2OEqn);
+    H2ORes_ = H2OEqn & H2O_;
+    normalizeResiduals(H2ORes);
+
+    // CASSANDRA hEqn_aero.H with PBE heat coupling disabled.
+    K_ = 0.5*magSqr(U_);
+    dpdt_ = fvc::ddt(p_);
+
+    tmp<fvScalarMatrix> thEqn
+    (
+        isPC
+        ? tmp<fvScalarMatrix>
+          (
+              new fvScalarMatrix
+              (
+                  fvm::ddt(rho_, he_)
+                + fvm::div(phi_, he_, divHEScheme)
+                + fvc::ddt(rho_, K_)
+                + fvc::div(phi_, K_)
+                + (he_.name() == "e"
+                       ? fvc::div(
+                           fvc::absolute(phi_/fvc::interpolate(rho_), U_),
+                           p_,
+                           "div(phiv,p)")
+                       : -dpdt_)
+                - fvm::laplacian(turbulence_.alphaEff(), he_)
+               ==
+                  fvOptions_(rho_, he_)
+              )
+          )
+        : tmp<fvScalarMatrix>
+          (
+              new fvScalarMatrix
+              (
+                  fvm::ddt(rho_, he_)
+                + mvConvection->fvmDiv(phi_, he_)
+                + fvc::ddt(rho_, K_)
+                + fvc::div(phi_, K_)
+                + (he_.name() == "e"
+                       ? fvc::div(
+                           fvc::absolute(phi_/fvc::interpolate(rho_), U_),
+                           p_,
+                           "div(phiv,p)")
+                       : -dpdt_)
+                - fvm::laplacian(turbulence_.alphaEff(), he_)
+               ==
+                  fvOptions_(rho_, he_)
+              )
+          )
+    );
+    fvScalarMatrix& hEqn = thEqn.ref();
+
+    if (MRF_.active())
+    {
+        // For now, omit this term; DAResidualTurboFoam also does not add an MRF term in the energy residual.
+        // hEqn += fvc::div(MRF_.phi(), p_);
+    }
+
+    hEqn.relax(1.0);
+    fvOptions_.constrain(hEqn);
+    TRes_ = hEqn & he_;
+    normalizeResiduals(TRes);
+
+    // CASSANDRA pEqn.H non-transonic pressure and flux residuals.
+    const volScalarField rAU(1.0/UEqn.A());
+    const surfaceScalarField rhorAUf("rhorAUf", fvc::interpolate(rho_*rAU));
+    const volVectorField HbyA(constrainHbyA(rAU*UEqn.H(), U_, p_));
+
+    const surfaceScalarField phiHbyA
+    (
+        "phiHbyA",
+        (
+            fvc::flux(rho_*HbyA)
+            // + MRF_.zeroFilter(rhorAUf*fvc::ddtCorr(rho_, U_, phi_))
+            // For now, omit the MRF zeroFilter term; use the plain flux as in DAResidualTurboFoam.
+        )
+    );
+
+    constrainPressure(p_, rho_, U_, phiHbyA, rhorAUf, MRF_);
+
+    fvScalarMatrix pEqn
+    (
+        fvm::ddt(psi_, p_)
+      + fvc::div(phiHbyA)
+      - fvm::laplacian(rhorAUf, p_)
+     ==
+        fvOptions_(psi_, p_, rho_.name())
+    );
+
+    pRes_ = pEqn & p_;
+    normalizeResiduals(pRes);
+
+    phiRes_ = phiHbyA + pEqn.flux() - phi_;
+    normalizePhiResiduals(phiRes);
 }
 
 void DAResidualContrailFoam::updateIntermediateVariables()
@@ -156,6 +394,9 @@ void DAResidualContrailFoam::correctBoundaryConditions()
     CO2_.correctBoundaryConditions();
     H2O_.correctBoundaryConditions();
 
+    // Preserve the standalone algebraic reconstruction on boundaries as well;
+    // do not independently correct N2 afterward because that can violate the
+    // mass-fraction closure imposed here.
     Y_[inertIndex_] = scalar(1) - O2_ - CO2_ - H2O_;
     Y_[inertIndex_].clamp_min(0);
     Y_[inertIndex_].correctBoundaryConditions();
