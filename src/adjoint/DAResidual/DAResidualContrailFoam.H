@@ -90,6 +90,9 @@ protected:
 public:
     TypeName("DAContrailFoam");
 
+    // Constructors
+    
+    //- Construct from components
     DAResidualContrailFoam(
         const word modelType,
         const fvMesh& mesh,
@@ -97,14 +100,25 @@ public:
         const DAModel& daModel,
         const DAIndex& daIndex);
 
+    //- Destructor
     virtual ~DAResidualContrailFoam()
     {
     }
 
+    // Members
+
+    /// clear the members
     virtual void clear();
+
+    /// compute residual
     virtual void calcResiduals(const dictionary& options);
+
+    /// update any intermediate variables that are dependent on state variables and are used in calcResiduals
     virtual void updateIntermediateVariables();
+
+    /// update the boundary condition for all the states in the selected solver
     virtual void correctBoundaryConditions();
+
     virtual void calcPCMatWithFvMatrix(Mat PCMat);
 };
 
@@ -113,3 +127,5 @@ public:
 #endif
 
 // ************************************************************************* //
+
+

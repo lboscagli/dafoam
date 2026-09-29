@@ -87,6 +87,12 @@ DAResidualContrailFoam::DAResidualContrailFoam(
 
 void DAResidualContrailFoam::clear()
 {
+    /*
+    Description:
+        Clear all members to avoid memory leak because we will initalize 
+        multiple objects of DAResidual. Here we need to delete all members
+        in the parent and child classes
+    */    
     URes_.clear();
     pRes_.clear();
     TRes_.clear();
@@ -98,6 +104,19 @@ void DAResidualContrailFoam::clear()
 
 void DAResidualContrailFoam::calcResiduals(const dictionary&)
 {
+    /*
+    Description:
+        This is the function to compute residuals.
+    
+    Input:
+        options.isPC: 1 means computing residuals for preconditioner matrix.
+        This essentially use the first order scheme for div(phi,U), div(phi,e)
+
+        p_, T_, U_, phi_, etc: State variables in OpenFOAM
+    
+    Output:
+        URes_, pRes_, TRes_, phiRes_, etc: residual field variables
+    */    
     FatalErrorInFunction
         << "DAResidualContrailFoam residual evaluation is not implemented yet."
         << exit(FatalError);
@@ -105,20 +124,49 @@ void DAResidualContrailFoam::calcResiduals(const dictionary&)
 
 void DAResidualContrailFoam::updateIntermediateVariables()
 {
-    FatalErrorInFunction
-        << "DAResidualContrailFoam multicomponent thermo update is not implemented yet."
-        << exit(FatalError);
+    // Match the standalone CASSANDRA inert-species reconstruction. N2 is a
+    // derived field and is not an independent DAFoam state.
+    Y_[inertIndex_] = scalar(1) - O2_ - CO2_ - H2O_;
+    Y_[inertIndex_].clamp_min(0);
+
+    // Set the energy field from the independent pressure, temperature, and
+    // multicomponent composition fields. The runtime thermo model then updates
+    // psi, molecular transport, thermal transport, and temperature boundaries.
+    he_ = thermo_.he(p_, T_);
+    thermo_.correct();
+
+    // psiReactionThermo returns rho from the current pressure and psi fields.
+    rho_ = thermo_.rho();
+    K_ = 0.5*magSqr(U_);
+    dpdt_ = fvc::ddt(p_);
 }
 
 void DAResidualContrailFoam::correctBoundaryConditions()
 {
-    FatalErrorInFunction
-        << "DAResidualContrailFoam boundary correction is not implemented yet."
-        << exit(FatalError);
+    /* 
+    Description:
+        Update the boundary condition for all the states in the selected solver
+    */    
+    MRF_.correctBoundaryVelocity(U_);
+
+    U_.correctBoundaryConditions();
+    p_.correctBoundaryConditions();
+    T_.correctBoundaryConditions();
+    O2_.correctBoundaryConditions();
+    CO2_.correctBoundaryConditions();
+    H2O_.correctBoundaryConditions();
+
+    Y_[inertIndex_] = scalar(1) - O2_ - CO2_ - H2O_;
+    Y_[inertIndex_].clamp_min(0);
+    Y_[inertIndex_].correctBoundaryConditions();
 }
 
 void DAResidualContrailFoam::calcPCMatWithFvMatrix(Mat)
 {
+    /* 
+    Description:
+        Calculate the diagonal block of the preconditioner matrix dRdWTPC using the fvMatrix
+    */    
     FatalErrorInFunction
         << "DAResidualContrailFoam preconditioner assembly is not implemented yet."
         << exit(FatalError);
