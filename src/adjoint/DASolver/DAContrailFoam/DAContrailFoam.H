@@ -55,6 +55,9 @@ protected:
     /// MRF zone list pointer
     autoPtr<IOMRFZoneListDF> MRFPtr_;
 
+    /// write the mesh together with the reduceIO adjoint states
+    label reduceIOWriteMesh_ = 0;
+
 public:
     TypeName("DAContrailFoam");
 

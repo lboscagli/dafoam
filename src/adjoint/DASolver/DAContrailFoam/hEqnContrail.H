@@ -26,7 +26,12 @@
 
     hEqn.relax();
     fvOptions.constrain(hEqn);
-    hEqn.solve();
+
+    SolverPerformance<scalar> solverH = hEqn.solve();
+    DAUtility::primalResidualControl(
+        solverH, pimplePrintToScreen, he.name(), daGlobalVarPtr_->primalMaxRes
+    );
+
     fvOptions.correct(he);
 
     thermo.correct();

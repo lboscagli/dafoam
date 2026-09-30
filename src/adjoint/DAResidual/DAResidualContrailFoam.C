@@ -332,13 +332,16 @@ void DAResidualContrailFoam::calcResiduals(const dictionary& options)
     const surfaceScalarField rhorAUf("rhorAUf", fvc::interpolate(rho_*rAU));
     const volVectorField HbyA(constrainHbyA(rAU*UEqn.H(), U_, p_));
 
+    // Mirrors CASSANDRA pEqn.H: the ddtCorr term belongs to phiHbyA (MRF's
+    // zeroFilter is the identity on the empty MRF zone list of contrailFoam).
+    // At construction time the term is zero because the old-time fields have
+    // not been stored yet.
     const surfaceScalarField phiHbyA
     (
         "phiHbyA",
         (
             fvc::flux(rho_*HbyA)
-            // + MRF_.zeroFilter(rhorAUf*fvc::ddtCorr(rho_, U_, phi_))
-            // For now, omit the MRF zeroFilter term; use the plain flux as in DAResidualTurboFoam.
+          + rhorAUf*fvc::ddtCorr(rho_, U_, phi_)
         )
     );
 

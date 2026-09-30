@@ -145,7 +145,7 @@ DADynamicKEqn::DADynamicKEqn(
     }
 
     kRes_.dimensions().reset(
-        dimVolume*rhoDimensions()*k_.dimensions()/dimTime
+        rhoDimensions()*k_.dimensions()/dimTime
     );
 }
 
