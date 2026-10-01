@@ -366,7 +366,25 @@ void DASolver::calcAllFunctions(label print)
         word functionName = daFunction.getFunctionName();
         word timeOpType = daFunction.getFunctionTimeOp();
         scalar functionVal = daFunction.calcFunction();
-        functionTimeSteps_[idxI][listIndex] = functionVal;
+
+        // bounds guard: functionTimeSteps_ is sized round(endTime/deltaT) in
+        // setDAFunctionList, but listIndex (= timeIndex - 1) can exceed that
+        // when deltaT shrinks during the run or the case restarts at a
+        // nonzero timeIndex; grow on demand with zero-fill so the trailing
+        // time-op window stays well defined
+        if (listIndex >= functionTimeSteps_[idxI].size())
+        {
+            label oldSize = functionTimeSteps_[idxI].size();
+            functionTimeSteps_[idxI].setSize(listIndex + 1);
+            for (label i = oldSize; i < functionTimeSteps_[idxI].size(); i++)
+            {
+                functionTimeSteps_[idxI][i] = 0.0;
+            }
+        }
+        if (listIndex >= 0)
+        {
+            functionTimeSteps_[idxI][listIndex] = functionVal;
+        }
 
         if (print)
         {

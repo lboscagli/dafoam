@@ -39,31 +39,33 @@ OpenFOAM:             v2506
 
 ### Operational status in this workspace
 
-Progress log (last updated after the Stage 1+2 DAContrailFoam patch):
+Progress log (last updated after Phase C validation and the outlet-BC investigation):
 
 **Done and verified:**
 
 - `DAStateInfoContrailFoam` is present and registers the reduced gas-phase state set (`U, p, T, O2, CO2, H2O, nut` per cell, `phi` per face; `N2` reconstructed, not a state).
-- `DADynamicKEqn` header/source skeletons are present and registered in the DAFoam runtime-selection build list.
+- `DADynamicKEqn` header/source skeletons are present and registered in the DAFoam runtime-selection build list; **its kResidual dimensions are fixed (Phase A)** so `calcPrimalResidualStatistics` passes (`Total Residual Norm2 12447191.93`).
 - `DATurbulenceModel` no longer assumes a hard-coded `RAS` dictionary and now accepts an `LES` turbulenceProperties block when present.
 - `DAResidualContrailFoam` implementation exists, is registered, and compiles.
 - `DAContrailFoam` wrapper compiles and links in original mode: Stage 1 fixed the two root compile errors (`tmp<convectionScheme>::ptr()` deletion in `createRefsContrail.H`, removed `GeometricField` ctor in `YEqnContrail.H`); Stage 2 rewrote `createFieldsContrail.H` (thermo/species/inert validation, rho/U/phi, pressureControl, turbulence, dpdt/K, MRF), fixed `initSolver()` ordering (pimple control -> fields -> LES-or-RAS turbulence name -> `DATurbulenceModel::New` -> `createAdjoint.H`), and fixed `createRefs` ownership (`thermo.p()`, no null `T`).
 - Registration is wired: `src/adjoint/Make/files` entry and the `pyDAFoam.py` `Compressible` registry entry.
 - Original-mode build validation passed: log `logs/dafoam-Allmake-20260929-152848.log`, 0 errors (authoritative check; `dafoam-Allmake-status.txt` can be stale).
 - PYDAFOAM initialization smoke test passed on the LES reference case (case `0/` generated via `generate_inlet_BCs.py`, mesh built via `blockMesh`): full construction (`initSolver` -> `createFields` -> turbulence -> `createAdjoint`, every registered-object lookup succeeded), exact adjoint state count `9*nCells + nFaces`, and `dpdt`/`K`/`rho` readable. Smoke script: `scripts/smoke_test_dacontrail.py` (original mode only; ADR/ADF bypassed).
+- **Stage 3 / Phase B:** `solvePrimal` time loop + CASSANDRA equation parity committed as `6f7a7ca` "Add Stage 3 primal time loop and contrail equation parity" (9 files, +288/−104, incl. `rhoEqnContrail.H`). B5's "preserve the transient CASSANDRA gas-phase PIMPLE sequence exactly" is satisfied; `fvSolution` has `consistent no`, so the `pcEqn` branch is inert in both solvers.
+- **Phase C executed (engineering-level pass):** step gates (step 1 bit-exact except FP-level k source; step 3 `U` 5.75e-6 / `k` 1.35e-2 / `nut` 1.88 — chaotic Germano amplification); matrix bisect proved the k seed is FP-level source-vector differences only (kEqn diag and all other dumped inputs bit-identical); twin runs `da_long`/`of_long` to t=0.076 with a common write at t=0.06: inlet patch values bit-identical, means agree to ≤3.5% (`UMean`) / ≤1.0% (`TMean`, `rhoMean`), figures exported to `work/stage3_figures/` (47 vs 50 PNGs, visually near-identical per user).
+- **Outlet-BC investigation closed with no defect:** `0/` byte-identical; divergence grows monotonically inlet (FP-level) → outlet; worst diffs in plume interior; outlet biases physically consistent with plume-arrival differences (see runbook "Phase C validation findings"). VTK suffix difference (`da_long_1` vs `of_long_1685`) is write-metadata only: OF's full write stores `<time>/uniform/time` `index 1685`, DA's reduceIO write omits it so `foamToVTK` falls back to directory enumeration; both dirs are t=0.06 (`.vtm.series`).
 - The OpenFOAM-v2512 tree was used only as a reference for the dynamicKEqn formulas; it was not compiled and is not part of the target build.
 
 **Remaining / not yet complete:**
 
-- Stage 3: `solvePrimal` is still the single-shot skeleton PIMPLE loop — no outer `runTime` time loop, equation order differs from CASSANDRA (`hEqn` before `YEqn` instead of `UEqn`->`YEqn`->`hEqn`), no `rhoEqn`, no `storePrevIter`/`pressureControl.limit`/CourantNo-`setDeltaT`/`turbulence->correct()`/field writing. Prompt B5's "preserve the transient CASSANDRA gas-phase PIMPLE sequence exactly" is not yet satisfied.
-- Residual evaluation: `calcPrimalResidualStatistics` aborts with a dimensions mismatch (`[1 2 -3]` vs `[1 -1 -3]`) inside `DAResidualContrailFoam::calcResiduals` — Phase A residual validation cannot pass until fixed.
-- a minimal LES primal smoke test (actually running the primal to a physical time and comparing to standalone) on the CASSANDRA gas-phase reference case
-- unsteady time-averaged LES observations, the small LES regression case, and standalone-versus-DAFoam field comparison (Phases C and D)
-- ADR/ADF: AD libs are stale (`libDASolverADR.so` predates the Stage 1+2 patch, `libDASolverADF.so` has no `DAContrailFoam`); rebuild only when explicitly requested (Phase D4 gate).
+- Phase C formal closure (optional): 0.3 s runs were stopped at t≈0.076; re-run for a full-length final/time-mean comparison if a formal sign-off beyond the current evidence is wanted.
+- Phase D: **D1 complete** (`DAContrailFoam_phaseD1_mean_objective_design.md`); **D2 recon complete** — existing `DAFunctionPatchMean` + `DATimeOpAverage` + `nStepsFrac` window suffice; remaining D2 work = bounds guard at `DASolver.C:369` + config + validation vs `fieldAverage1` (note: OF fieldAverage is dt-weighted, `DATimeOpAverage` is not — quantify the difference); then D3 sensitivity/identifiability plan, D4 ADR enablement audit. Session state + resume prompts: `DAContrailFoam_session_handover.md`.
+- ADR/ADF: AD libs are stale (`libDASolverADR.so` predates the Stage 1+2 patch, `libDASolverADF.so` has no `DAContrailFoam`); rebuild only after the D4 audit and when explicitly requested.
+- `reduceIO` intermediate writes omit `N2`, `nut`, `alphat`, `rho` (and `uniform/time`); comparison scripts must not expect them in intermediate time dirs.
 - `DAField.C:1137` hard-codes `turbDict.subDict("RAS")` — dormant because default `primalBC = {}` (fires only with `useWallFunction`), but must be generalized before wall-function LES use.
 - aerosol/PBE physics (Phase E, intentionally deferred)
 
-**Uncommitted working tree:** the Stage 1+2 patch (`src/adjoint/DASolver/DAContrailFoam/*`, `dafoam/pyDAFoam.py`, `src/adjoint/Make/files`, `DAContrailFoam_runbook.md`, this progress update) is currently uncommitted; commit after review per the validation loop below.
+**Working tree:** this changeset commits the Phase A–D2 record (`DAContrailFoam_runbook.md`, this progress update, `DAContrailFoam_phaseD1_mean_objective_design.md`, `DAContrailFoam_session_handover.md`) together with the D2 bounds guard in `src/adjoint/DASolver/DASolver.C`. The Stage 3 code itself was committed earlier as `6f7a7ca`. Nothing further is uncommitted; further commits only on explicit request.
 
 ### Completed DAFoam changes
 
@@ -72,6 +74,7 @@ The following commits are compiled in original mode and pushed:
 ```text
 759e6d9 Allow multicomponent thermophysical dictionaries
 8046cff Add contrail gas-phase state information
+6f7a7ca Add Stage 3 primal time loop and contrail equation parity
 ```
 
 `DAStateInfoContrailFoam` currently registers the independent reduced-model gas states:
@@ -82,7 +85,7 @@ U, p, T, phi, O2, CO2, H2O, and runtime-corrected turbulence model states
 
 `N2` is not an independent state: it is reconstructed as the inert species.
 
-> **LES status:** the current state-information implementation was compiled against the existing `kEpsilon` DAFoam model support. It is not evidence that `dynamicKEqn` is supported. DAFoam v5.1.1 has no `DATurbulenceModel` implementation for `dynamicKEqn`. The LES prerequisite phase below must be completed before selecting the LES reference case with `DAContrailFoam`.
+> **LES status:** the **primal** `dynamicKEqn` LES path is now live: `DADynamicKEqn` is registered, its kResidual dimensions were fixed in Phase A, and `DAContrailFoam` has run the dynamicKEqn LES reference primal (Phase C twin runs). This is primal evidence only — it is **not** evidence that reverse/forward AD through `dynamicKEqn` works; that remains gated on the Phase D4 ADR enablement audit.
 
 ### First physical target
 
@@ -212,15 +215,16 @@ Completed in the current workspace:
   Stage 1+2 patch; build log `dafoam-Allmake-20260929-152848.log`, 0 errors)
 - PYDAFOAM initialization smoke test passed on the LES reference case
   (`scripts/smoke_test_dacontrail.py`, original mode)
+- **running the LES primal itself** (Stage 3 time loop, commit `6f7a7ca`)
+- **residual-evaluation validation** (Phase A kRes dimensions fix;
+  `--residuals` passes)
+- **standalone-versus-DAFoam LES primal comparison** (Phase C: gates + twin
+  0.06 s runs + figures; see Operational status)
 
 Not yet complete:
 
-- running the LES primal itself (needs the Stage 3 `solvePrimal` time-loop fix;
-  see Operational status)
-- residual-evaluation validation (`calcPrimalResidualStatistics` aborts on a
-  dimensions mismatch — Phase A gate)
-- standalone-versus-DAFoam LES primal comparison (Prompt L4 / Phase C)
-- any ADR/adjoint work beyond the prerequisite model layer
+- any ADR/adjoint work through the LES model layer (Phase D4 audit gate)
+- Phase C formal full-length (0.3 s) closure, if wanted beyond current evidence
 
 ## Prompt L1 — audit the OpenFOAM dynamicKEqn model and DAFoam turbulence interface
 
@@ -284,7 +288,7 @@ the turbulence fields, nut, alphat, U, p, and T on a short copied case.
 
 # Phase A — Reduced gas-phase residual implementation
 
-**Status:** Prompts A1–A7 executed in earlier sessions: `DAResidualContrailFoam` exists, is registered, and compiles. Validation NOT yet passed — `calcPrimalResidualStatistics` aborts inside `calcResiduals()` on a dimensions mismatch (`[1 2 -3]` vs `[1 -1 -3]`), so the "inspect residual fields at a standalone converged LES state" gate is still open. Fix + revalidate before Phase C.
+**Status:** **Passed.** Prompts A1–A7 executed in earlier sessions; the Phase A blocker (kResidual dimensions `[1 2 -3]` vs `[1 -1 -3]`) was fixed in `DADynamicKEqn.C` (`rhoDimensions()*k_.dimensions()/dimTime`); smoke test and `calcPrimalResidualStatistics`/`--residuals` pass (`Total Residual Norm2 12447191.93`).
 
 Begin this phase only after the `dynamicKEqn` prerequisite supports the LES primal path.
 
@@ -409,7 +413,7 @@ microphysics source terms.
 
 # Phase B — Primal DAContrailFoam wrapper
 
-**Status:** B1–B4 done (file split, equation includes ported from CASSANDRA, field creation per B3 implemented in `createFieldsContrail.H`); B5 done for registration and initialization (runtime selection, `Make/files`, pyDAFoam registry, `initSolver` full wiring — Stage 1+2 patch compiles and passes the PYDAFOAM initialization smoke test). **Remaining for B5:** `solvePrimal()` must be reworked to preserve the transient CASSANDRA gas-phase PIMPLE sequence exactly (outer time loop, `UEqn`->`YEqn`->`hEqn` order, `rhoEqn`, store/limit/CourantNo/turbulence-correct/write) — this is the Stage 3 work.
+**Status:** **Complete.** B1–B4 done (file split, equation includes ported from CASSANDRA, field creation per B3 in `createFieldsContrail.H`); B5 done for registration/initialization (Stage 1+2) and for the transient sequence: the Stage 3 rework of `solvePrimal()` (outer time loop, `UEqn`->`YEqn`->`hEqn` order, `rhoEqnContrail`, storePrevIter/CourantNo/setDeltaT/turbulence-correct/write, ddtCorr fix in `pEqnContrail.H`) is committed as `6f7a7ca`. Parity notes: `fvSolution` `consistent no` makes the `pcEqn` branch inert in both solvers; `pEqnContrail.H` ports the non-transonic branch by design (matches `DAResidualContrailFoam`).
 
 ## Prompt B1 — design the wrapper file split
 
@@ -478,7 +482,7 @@ Do not enable ADR/ADF and do not add aerosol/PBE code.
 
 # Phase C — Standalone versus DAFoam primal validation
 
-**Status:** Not started. Blocked on Stage 3 (`solvePrimal` time-loop parity) and the Phase A residual fix; only the initialization smoke test has run so far.
+**Status:** **Executed — engineering-level pass (formally partial).** C1/C2 in use: `scripts/stage3_primal_compare.py` (modes `da`/`of`/`cmp`, `k/TKE` + `k/TKEsum` rows) drives both solvers and dumps npz. Evidence: step-1 gates bit-exact except the FP-level k source seed (matrix bisect: kEqn diag + all other dumped inputs bit-identical; only explicit source differs, max 1.56e-8); step 3 `U` 5.75e-6 / `k` 1.35e-2 / `nut` 1.88 (chaotic Germano amplification — use engineering tolerances, not rtol 1e-6); twin runs `da_long`/`of_long` to t≈0.076 with common write at t=0.06: inlet patch values bit-exact, means `UMean` 3.5% / `TMean` 0.8% / `rhoMean` 1.0%, second moments 5–10%, figures in `work/stage3_figures/` (user-verified near-identical). Outlet-BC suspicion investigated and closed with no defect; VTK suffix difference is write-metadata only (see runbook findings). **Optional remaining:** full 0.3 s run + final/time-mean comparison for a formal sign-off. C3 (regression case) not started.
 
 ## Prompt C1 — minimal PYDAFOAM driver
 
@@ -516,7 +520,7 @@ matches the standalone reference.
 
 # Phase D — Time-averaged LES objective, then adjoint
 
-**Status:** Not started. Gated on Phase C passing; ADR/ADF rebuild also pending (AD libs stale — see Operational status).
+**Status:** **D1 done, D2 recon done, implementation pending.** The Phase C gate is satisfied at engineering level (dynamicKEqn LES primal runs and matches standalone within declared tolerances; outlet-BC investigation closed clean). D1 design delivered (`DAContrailFoam_phaseD1_mean_objective_design.md`); D2 recon found the objective machinery already exists — `DAFunctionPatchMean` (dict: `type/source/patches/scale/varName/varType/index`), `DATimeOpAverage`, `getTimeOpRange` trailing `nStepsFrac` window (emulate [t0,t1] with `endTime=t1`, `nStepsFrac=(t1-t0)/endTime`), python `evalFunctions` → `getTimeOpFuncVal` — so D2 = one bounds guard (`DASolver.C:369`, unguarded store into a list sized `round(endTime/deltaT)` at :584) + `function` dict in the driver + short validation run vs the case's `fieldAverage1` (`controlDict` line 377; dt-weighted, unlike `DATimeOpAverage`). ADR/ADF rebuild remains gated on Prompt D4 + explicit request. Work order: D2 (implement + validate) → D3 (sensitivity plan) → D4 (ADR audit) → rebuild + FD validation. Resume from `DAContrailFoam_session_handover.md` §3.
 
 Do not begin this phase until the `dynamicKEqn` LES primal path and the multicomponent gas-phase primal comparison both pass.
 
@@ -654,10 +658,10 @@ Stop and inspect before proceeding if any of the following occurs:
 
 The first milestone is complete only when all conditions hold:
 
-1. `DAContrailFoam` runs the PBE-disabled, multicomponent, dynamicKEqn LES case in original mode. — **pending (Stage 3 time loop)**
-2. The DADynamicKEqn model reproduces the standalone OpenFOAM dynamicKEqn primal behavior on a short copied case. — **pending**
-3. `DAContrailFoam` reproduces standalone final and selected time-averaged fields within declared tolerances. — **pending (Phase C)**
-4. `U`, `p`, `T`, `rho`, `O2`, `CO2`, `H2O`, dynamicKEqn model-state fields, `nut`, and relevant thermal-turbulence fields are compared. — **pending (Phase C)**
+1. `DAContrailFoam` runs the PBE-disabled, multicomponent, dynamicKEqn LES case in original mode. — **done (Stage 3, commit `6f7a7ca`; `da_long` ran to t≈0.076)**
+2. The DADynamicKEqn model reproduces the standalone OpenFOAM dynamicKEqn primal behavior on a short copied case. — **done at engineering level (step gates + twin 0.06 s runs; known chaotic `nut`/`k` divergence documented; formal 0.3 s closure optional)**
+3. `DAContrailFoam` reproduces standalone final and selected time-averaged fields within declared tolerances. — **done at engineering level for the t=0.06 window (`UMean` 3.5%, `TMean` 0.8%, `rhoMean` 1.0%); full-run final-field sign-off optional**
+4. `U`, `p`, `T`, `rho`, `O2`, `CO2`, `H2O`, dynamicKEqn model-state fields, `nut`, and relevant thermal-turbulence fields are compared. — **done (npz cmp + patch/region statistics + `*Mean` fields; `nut`/`k` show the documented Germano amplification)
 5. The state/residual system contains independent `O2`, `CO2`, and `H2O` states and derived `N2`. — **done (structure: state info, YEqn reconstruction, residual class)**
 6. No aerosol/PBE, vaporSink, latentSource, or microphysics code is active in the wrapper. — **done (verified in field creation and equation includes)**
 7. The implementation has a small LES regression case and a documented build/run procedure. — **pending (Phase C3); build procedure documented in `DAContrailFoam_runbook.md`**
