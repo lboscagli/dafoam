@@ -55,11 +55,12 @@ Progress log (last updated after Phase C validation and the outlet-BC investigat
 - **Phase C executed (engineering-level pass):** step gates (step 1 bit-exact except FP-level k source; step 3 `U` 5.75e-6 / `k` 1.35e-2 / `nut` 1.88 — chaotic Germano amplification); matrix bisect proved the k seed is FP-level source-vector differences only (kEqn diag and all other dumped inputs bit-identical); twin runs `da_long`/`of_long` to t=0.076 with a common write at t=0.06: inlet patch values bit-identical, means agree to ≤3.5% (`UMean`) / ≤1.0% (`TMean`, `rhoMean`), figures exported to `work/stage3_figures/` (47 vs 50 PNGs, visually near-identical per user).
 - **Outlet-BC investigation closed with no defect:** `0/` byte-identical; divergence grows monotonically inlet (FP-level) → outlet; worst diffs in plume interior; outlet biases physically consistent with plume-arrival differences (see runbook "Phase C validation findings"). VTK suffix difference (`da_long_1` vs `of_long_1685`) is write-metadata only: OF's full write stores `<time>/uniform/time` `index 1685`, DA's reduceIO write omits it so `foamToVTK` falls back to directory enumeration; both dirs are t=0.06 (`.vtm.series`).
 - The OpenFOAM-v2512 tree was used only as a reference for the dynamicKEqn formulas; it was not compiled and is not part of the target build.
+- **Phase D2 complete (commit `f33eab6`):** `functionTimeSteps_` bounds guard in `DASolver::calcAllFunctions` (grow-on-demand + `listIndex >= 0` skip); original-mode rebuild clean (`logs/dafoam-Allmake-20261001-062527.log`, `*** Build Successful! ***`); `stage3_primal_compare.py --func` injects `meanTOutlet` and prints `evalFunctions`; 0.012 s validation vs `fieldAverage1` → `evalFunctions` 208.0155615012 K vs `TMean` outlet areaAverage 208.0159243 K, **difference −3.628e-4 K = −1.744e-6 rel, entirely dt-weighting** (`DATimeOpAverage` unweighted, fieldAverage dt-weighted; both sample `t1..tN`, no t=0 sample); guard-trigger run (60-slot list, 120 steps) survived with exact readback. Full record: runbook "Phase D2".
 
 **Remaining / not yet complete:**
 
 - Phase C formal closure (optional): 0.3 s runs were stopped at t≈0.076; re-run for a full-length final/time-mean comparison if a formal sign-off beyond the current evidence is wanted.
-- Phase D: **D1 complete** (`DAContrailFoam_phaseD1_mean_objective_design.md`); **D2 recon complete** — existing `DAFunctionPatchMean` + `DATimeOpAverage` + `nStepsFrac` window suffice; remaining D2 work = bounds guard at `DASolver.C:369` + config + validation vs `fieldAverage1` (note: OF fieldAverage is dt-weighted, `DATimeOpAverage` is not — quantify the difference); then D3 sensitivity/identifiability plan, D4 ADR enablement audit. Session state + resume prompts: `DAContrailFoam_session_handover.md`.
+- Phase D: **D1 complete** (`DAContrailFoam_phaseD1_mean_objective_design.md`); **D2 complete (commit `f33eab6`)** — guard + `--func` + validation done, dt-weighting difference quantified (−1.74e-6 rel); optional D2 follow-ups: a dt-weighted `timeOp` if exact `fieldAverage` agreement is wanted, and recompute-from-t0 on restart before any adjoint use. Next: **D3** sensitivity/identifiability plan, then **D4** ADR enablement audit. Session state + resume prompts: `DAContrailFoam_session_handover.md`.
 - ADR/ADF: AD libs are stale (`libDASolverADR.so` predates the Stage 1+2 patch, `libDASolverADF.so` has no `DAContrailFoam`); rebuild only after the D4 audit and when explicitly requested.
 - `reduceIO` intermediate writes omit `N2`, `nut`, `alphat`, `rho` (and `uniform/time`); comparison scripts must not expect them in intermediate time dirs.
 - `DAField.C:1137` hard-codes `turbDict.subDict("RAS")` — dormant because default `primalBC = {}` (fires only with `useWallFunction`), but must be generalized before wall-function LES use.
@@ -69,12 +70,13 @@ Progress log (last updated after Phase C validation and the outlet-BC investigat
 
 ### Completed DAFoam changes
 
-The following commits are compiled in original mode and pushed:
+The following commits are compiled in original mode (local branch; push only on explicit request):
 
 ```text
 759e6d9 Allow multicomponent thermophysical dictionaries
 8046cff Add contrail gas-phase state information
 6f7a7ca Add Stage 3 primal time loop and contrail equation parity
+f33eab6 Add mean objective bounds guard and phase D2 record
 ```
 
 `DAStateInfoContrailFoam` currently registers the independent reduced-model gas states:
