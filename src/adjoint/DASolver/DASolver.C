@@ -462,8 +462,20 @@ void DASolver::getTimeOpRange(
 double DASolver::getTimeOpFuncVal(const word functionName)
 {
     // return the function value based on timeOp
+    if (primalFinalTimeIndex_ == 0)
+    {
+        FatalErrorIn("getTimeOpFuncVal")
+            << "primalFinalTimeIndex_ == 0: the primal has not been run (or did "
+            << "not complete any time step), so the time-op window for function "
+            << "\"" << functionName << "\" is empty and no samples exist. Run "
+            << "solvePrimal successfully before calling evalFunctions/"
+            << "getTimeOpFuncVal."
+            << abort(FatalError);
+    }
+
     label listFinalIndex = primalFinalTimeIndex_ - 1;
     scalar funcVal = 0.0;
+    bool functionFound = false;
     forAll(daFunctionPtrList_, idxI)
     {
         DAFunction& daFunction = daFunctionPtrList_[idxI];
@@ -477,7 +489,26 @@ double DASolver::getTimeOpFuncVal(const word functionName)
             this->getTimeOpRange(functionName, timeOpType, listFinalIndex, startIdx, endIdx);
             funcVal = daTimeOpPtrList_[idxI].compute(
                 functionTimeSteps_[idxI], startIdx, endIdx);
+            functionFound = true;
         }
+    }
+
+    if (!functionFound)
+    {
+        string available;
+        forAll(daFunctionPtrList_, idxI)
+        {
+            if (idxI > 0)
+            {
+                available += ", ";
+            }
+            available += daFunctionPtrList_[idxI].getFunctionName();
+        }
+        FatalErrorIn("getTimeOpFuncVal")
+            << "functionName \"" << functionName
+            << "\" not found in daFunctionPtrList_. Configured functions: ["
+            << available << "]"
+            << abort(FatalError);
     }
 #if defined(CODI_ADF)
     return funcVal.getGradient();
@@ -493,6 +524,16 @@ scalar DASolver::getdFScaling(
     const word functionName,
     const label timeIdx)
 {
+    if (primalFinalTimeIndex_ == 0)
+    {
+        FatalErrorIn("getdFScaling")
+            << "primalFinalTimeIndex_ == 0: the primal has not been run (or did "
+            << "not complete any time step), so the time-op window for function "
+            << "\"" << functionName << "\" is empty and no samples exist. Run "
+            << "solvePrimal successfully before calling getdFScaling."
+            << abort(FatalError);
+    }
+
     scalar scaling = 0.0;
     label listFinalIndex = primalFinalTimeIndex_ - 1;
     forAll(daFunctionPtrList_, idxI)
@@ -514,8 +555,10 @@ scalar DASolver::getdFScaling(
             return scaling;
         }
     }
-    FatalErrorIn("getdFScaling") << "functionName not found! "
-                                 << abort(FatalError);
+    FatalErrorIn("getdFScaling")
+        << "functionName \"" << functionName
+        << "\" not found in daFunctionPtrList_."
+        << abort(FatalError);
     return scaling;
 }
 

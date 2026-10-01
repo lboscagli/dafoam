@@ -575,6 +575,72 @@ constant in this window; the run proves survival + correct readback across the
 resize, not value diversity. The main `da_func` run (266 steps vs 1200
 pre-sized) did not need the guard.
 
+## Phase D2 hardening — Prompt 2 error handling (committed)
+
+### What fails loudly now (previously silently wrong)
+
+| case | pre-fix behavior | post-fix |
+|---|---|---|
+| `getTimeOpFuncVal` with `primalFinalTimeIndex_ == 0` (primal never ran / primal failed) | window `[0, -1]` → `avg /= 0` → **NaN returned silently** | `FatalError` "primalFinalTimeIndex_ == 0 … run solvePrimal first" |
+| `getdFScaling` with `primalFinalTimeIndex_ == 0` | window check never matches → **0 returned silently** (wrong scaling) | same `FatalError` in `getdFScaling` |
+| `getTimeOpFuncVal("wrongName")` | loop no-match → **0.0 returned silently** (`getdFScaling` was already fatal) | `FatalError` listing the configured function names |
+| `getdFScaling("wrongName", …)` | already fatal (message did not include the name) | fatal, now includes the offending name |
+| empty window `iEnd < iStart` inside `DATimeOpAverage::compute` | `avg /= 0` → NaN (and `dFScaling` → `1/0` = inf) | `FatalError` with iStart/iEnd/list size |
+| empty window in `DATimeOpFinal::compute` | `valList[-1]` **out-of-bounds read** | same `FatalError` guard |
+| empty window in `DATimeOpMax::compute` | KS mode `log(0)` = −inf, orig mode bogus `-1e16` | same `FatalError` guard |
+| `DAFunctionPatchMean` with zero total face area | `value / areaSum_` → **NaN** | `FatalError` "Total face area … is 0" |
+
+The empty-window guards in the three `DATimeOp` classes are backstops: every
+externally reachable path (a `getTimeOpFuncVal`/`getdFScaling` call with an
+empty window) is already blocked by the two `primalFinalTimeIndex_ == 0`
+fatals, and `calcAllFunctions` only ever runs with `timeIndex >= 1`
+(`listIndex >= 0`), for which `getTimeOpRange` always returns
+`startIdx <= endIdx`. The guards make the invariant explicit for future
+callers.
+
+### Files changed
+
+`src/adjoint/DASolver/DASolver.C` (`getTimeOpFuncVal`, `getdFScaling`),
+`src/adjoint/DATimeOp/DATimeOpAverage.C` (both methods),
+`src/adjoint/DATimeOp/DATimeOpFinal.C` (`compute`),
+`src/adjoint/DATimeOp/DATimeOpMax.C` (`compute`),
+`src/adjoint/DAFunction/DAFunctionPatchMean.C` (`calcFunction`).
+
+Rebuild: `logs/dafoam-Allmake-20261001-073832.log` — all five files
+recompiled (`Ctoo: …`), `libDASolver.so` relinked (07:38), `*** Build
+Successful! ***`, `grep -c error` = 0.
+
+### Verification (container `/tmp/stage3`, case `da_err` = `da_func` copy with
+`endTime 0.00002`)
+
+Script `prompt2_test.py <mode> <case>`; each failure case is its own process
+because `abort(FatalError)` kills it (exit 134 = SIGABRT).
+
+| mode | action | exit | observed |
+|---|---|---|---|
+| `noprim_val` | init with `function`, **no** primal → `evalFunctions({})` | 134 | `FOAM FATAL ERROR: primalFinalTimeIndex_ == 0 … getTimeOpFuncVal` |
+| `noprim_scale` | init, no primal → `solver.getdFScaling("meanTOutlet", 0)` | 134 | same message from `getdFScaling` |
+| `bogus_val` | 2-step primal → `solver.getTimeOpFuncVal("bogusFunc")` | 134 | `functionName "bogusFunc" not found in daFunctionPtrList_. Configured functions: ["meanTOutlet"]` |
+| `bogus_scale` | 2-step primal → `solver.getdFScaling("bogusFunc", 0)` | 134 | `functionName "bogusFunc" not found in daFunctionPtrList_.` |
+| `areasum` | function dict with `source: allCells` (leaves `faceSources_` empty) → fatal inside the primal loop | 134 | `Total face area of patchMean function "meanTOutlet" is 0 …` |
+| sanity | normal path: `stage3_primal_compare.py --mode da --case da_err --func` | 0 | `primalFail=0`, `meanTOutlet = 2.080000000000e+02` (2 pristine steps, expected) |
+
+The empty-window `DATimeOp*` guards could not be triggered from Python (the
+DASolver-level fatals fire first), so they are verified by code-path analysis
+above rather than by a run.
+
+### New finding (follow-up, not fixed here)
+
+An empty patch list (`"patches": []` with `source: patchToFace`) segfaults
+during `PYDAFOAM` **construction** — PETSc reports `signal 11 SEGV`, then
+`MPI_ABORT` (exit 59) — before `initSolver()` completes and before any of the
+guards above are reachable (none of them run during init; only the unchanged
+`DAFunctionPatchMean` constructor runs there). `-X faulthandler` and
+`PETSC_OPTIONS=-no_signal_trap` did not yield a Python backtrace and no
+`gdb`/`catchsegv` exists in the container, so the exact frame is unisolated.
+Recorded as a follow-up; the `areaSum_ == 0` case was therefore verified via
+`source: allCells` instead, which reaches `calcFunction` normally.
+
 ## Notes
 
 The implementation should stay intentionally narrow and reviewable. The first milestone is not a full DAFoam contrail solver; it is the reduced gas-phase path that matches the validated CASSANDRA no-PBE physics.

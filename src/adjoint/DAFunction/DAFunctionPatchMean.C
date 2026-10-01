@@ -57,6 +57,18 @@ scalar DAFunctionPatchMean::calcFunction()
     }
     reduce(areaSum_, sumOp<scalar>());
 
+    // a zero total face area (empty patches/faceSources selection, or a
+    // degenerate patch) would divide by zero below
+    if (areaSum_ <= 0.0)
+    {
+        FatalErrorIn("DAFunctionPatchMean::calcFunction")
+            << "Total face area of patchMean function \""
+            << this->getFunctionName() << "\" is " << areaSum_
+            << ". The selected patches contain no face area; check the "
+            << "'patches' list in the function dictionary."
+            << abort(FatalError);
+    }
+
     // initialize objFunValue
     scalar functionValue = 0.0;
 

@@ -33,6 +33,16 @@ scalar DATimeOpMax::compute(
     const label iStart,
     const label iEnd)
 {
+    // empty window would give log(0) (KS mode) or a bogus -1e16 (orig mode)
+    if (iStart < 0 || iEnd < iStart || iEnd >= valList.size())
+    {
+        FatalErrorIn("DATimeOpMax::compute")
+            << "empty or invalid time-op window: iStart = " << iStart
+            << ", iEnd = " << iEnd << ", valList size = " << valList.size()
+            << ". The window must contain at least one stored sample."
+            << abort(FatalError);
+    }
+
     // return the estimated max value from valList
     // KS = log( sum( exp(x_i*c) ) )/c
 
