@@ -60,8 +60,22 @@ Progress log (last updated after Phase C validation and the outlet-BC investigat
 **Remaining / not yet complete:**
 
 - Phase C formal closure (optional): 0.3 s runs were stopped at t≈0.076; re-run for a full-length final/time-mean comparison if a formal sign-off beyond the current evidence is wanted.
-- Phase D: **D1 complete** (`DAContrailFoam_phaseD1_mean_objective_design.md`); **D2 complete (commit `f33eab6`)** — guard + `--func` + validation done, dt-weighting difference quantified (−1.74e-6 rel); optional D2 follow-ups: a dt-weighted `timeOp` if exact `fieldAverage` agreement is wanted, and recompute-from-t0 on restart before any adjoint use. Next: **D3** sensitivity/identifiability plan, then **D4** ADR enablement audit. Session state + resume prompts: `DAContrailFoam_session_handover.md`.
-- ADR/ADF: AD libs are stale (`libDASolverADR.so` predates the Stage 1+2 patch, `libDASolverADF.so` has no `DAContrailFoam`); rebuild only after the D4 audit and when explicitly requested.
+- Phase D: **D1/D2/D3/D4 all delivered.** D1 design
+  (`DAContrailFoam_phaseD1_mean_objective_design.md`); **D2 complete (commit
+  `f33eab6`)** — guard + `--func` + validation, dt-weighting difference
+  quantified (−1.74e-6 rel); **Prompt 2 complete (commit `fef5cc5`)** —
+  fail-fast errors for primal-not-run / unknown function / empty window /
+  zero patch area, verified by five failure-case runs (runbook "Phase D2
+  hardening"); **D3 plan**
+  (`DAContrailFoam_phaseD3_sensitivity_plan.md`): inlet jet velocity scale α,
+  fixed-dt FD protocol with repeatability gates R1–R4 and acceptance G1–G7,
+  costed two-tier run matrix; **D4 audit**
+  (`DAContrailFoam_phaseD4_adr_audit.md`): non-smooth inventory, coded-BC
+  blocker, checkpoint/replay + time-average requirements, gates G1–G6.
+  Remaining work is *execution*, not design: run the D3 matrix; on explicit
+  request rebuild ADR/ADF starting at D4 gate G1 with acceptance at G5.
+  Session state + resume prompts: `DAContrailFoam_session_handover.md`.
+- ADR/ADF: AD libs are stale (`libDASolverADR.so` Sep 21, `libDASolverADF.so` Sep 15, no `DAContrailFoam`); the D4 audit is written (`DAContrailFoam_phaseD4_adr_audit.md`) — rebuild only when explicitly requested, then gates G1→G5 apply (no "ADR support" claim before G5).
 - `reduceIO` intermediate writes omit `N2`, `nut`, `alphat`, `rho` (and `uniform/time`); comparison scripts must not expect them in intermediate time dirs.
 - `DAField.C:1137` hard-codes `turbDict.subDict("RAS")` — dormant because default `primalBC = {}` (fires only with `useWallFunction`), but must be generalized before wall-function LES use.
 - aerosol/PBE physics (Phase E, intentionally deferred)

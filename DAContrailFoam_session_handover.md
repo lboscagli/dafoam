@@ -1,14 +1,40 @@
-# Session Handover — 2026-10-01 (Phase C closed, D1+D2 done, D2 committed as f33eab6)
+# Session Handover — 2026-10-01 (Phase C closed, Phase D design docs D1–D4 done, D2+Prompt2 code committed)
 
 ## 1. ARCHITECTURAL STATE
 
-DAFoam v5.1.1 fork (branch `feature/contrailfoam-primal-wrapper`, head `f33eab6` — local, ahead of origin by 2, not pushed; git root = this directory) wraps the CASSANDRA gas-phase LES `contrailFoam` (dynamicKEqn, species O2/N2/CO2/H2O, 280k cells) as `DAContrailFoam` in original mode only (`COMPILE_DAFOAM_NOAD=1`; container `dafoam-dev`; env `source /workspace/src/cassandra/dafoam_env_doc/load_cassandra_dafoam_env.sh`). Phases A–C are closed (primal validated at engineering level: bit-exact inlet, means ≤3.5%, outlet-BC suspicion cleared, VTK suffix explained as write-metadata); Phase D: D1 design doc written, **D2 implemented, validated and committed (`f33eab6`)** — working tree clean, next is D3 (or Prompt 2 error hardening).
+DAFoam v5.1.1 fork (branch `feature/contrailfoam-primal-wrapper`; code
+commits `f33eab6` (D2 guard + record) and `fef5cc5` (Prompt 2 fail-fast
+errors); D3/D4 documents committed in this changeset; git root = this
+directory) wraps the CASSANDRA gas-phase LES `contrailFoam` (dynamicKEqn,
+species O2/N2/CO2/H2O, 280k cells) as `DAContrailFoam` in original mode only
+(`COMPILE_DAFOAM_NOAD=1`; container `dafoam-dev`; env `source
+/workspace/src/cassandra/dafoam_env_doc/load_cassandra_dafoam_env.sh`).
+Phases A–C closed (primal validated at engineering level); Phase D: D1 design,
+D2 implementation + validation, Prompt 2 error hardening (verified by five
+failure-case runs), D3 sensitivity plan and D4 ADR audit all delivered —
+**no design work pending**; remaining is execution (D3 run matrix; ADR/ADF
+rebuild + FD validation on explicit request).
 
 ## 2. CURRENT CODE (ESSENTIAL SNAPSHOT ONLY)
 
-Committed as `f33eab6` "Add mean objective bounds guard and phase D2 record" (working tree clean; further commits only on explicit request):
-- `src/adjoint/DASolver/DASolver.C` — bounds guard in `calcAllFunctions` (grow `functionTimeSteps_[idxI]` to `listIndex+1` zero-filled when `listIndex >= size`; skip store when `listIndex < 0`).
-- `DAContrailFoam_runbook.md` (Phase D2 section: window/reset/finalization/restart behavior, validation numbers), `dafoam_contrailfoam_copilot_prompt_pack.md`, `DAContrailFoam_phaseD1_mean_objective_design.md`, `DAContrailFoam_session_handover.md`.
+Committed in this session (working tree clean afterwards; further commits only
+on explicit request):
+- `f33eab6` "Add mean objective bounds guard and phase D2 record" —
+  `src/adjoint/DASolver/DASolver.C` bounds guard in `calcAllFunctions` (grow
+  `functionTimeSteps_[idxI]` to `listIndex+1` zero-filled when
+  `listIndex >= size`; skip store when `listIndex < 0`), plus
+  `DAContrailFoam_runbook.md` (Phase D2 section: window/reset/finalization/
+  restart behavior, validation numbers), `dafoam_contrailfoam_copilot_prompt_pack.md`,
+  `DAContrailFoam_phaseD1_mean_objective_design.md`,
+  `DAContrailFoam_session_handover.md`.
+- `fef5cc5` "Fail fast on mean objective misuse" (Prompt 2) —
+  `DASolver.C` (`getTimeOpFuncVal`/`getdFScaling` fatals for
+  `primalFinalTimeIndex_ == 0` and unknown function name),
+  `DATimeOpAverage.C`/`DATimeOpFinal.C`/`DATimeOpMax.C` empty-window guards,
+  `DAFunctionPatchMean.C` `areaSum_ <= 0` fatal; runbook "Phase D2 hardening"
+  section with the five verification runs.
+- this changeset: `DAContrailFoam_phaseD3_sensitivity_plan.md`,
+  `DAContrailFoam_phaseD4_adr_audit.md`, runbook/prompt-pack/handover status.
 - Not in git: `work/scripts/stage3_primal_compare.py` (host, not a git repo) gained `--func` → injects `meanTOutlet` dict and prints `STAGE3: func meanTOutlet = ...`.
 
 D2 validation result (runbook "Phase D2" has full record): 0.012 s copied case, 266 steps, `evalFunctions` 208.0155615012 K vs fieldAverage `TMean` outlet areaAverage 208.0159243 K → difference −3.628e-4 K = −1.744e-6 rel, **entirely dt-weighting** (DATimeOpAverage unweighted, fieldAverage dt-weighted, same sample set t1..tN); guard-trigger run (60-slot list, 120 steps) survived with exact readback. Build log: `logs/dafoam-Allmake-20261001-062527.log`.
@@ -27,5 +53,22 @@ D2 recon findings (existing machinery — no new classes needed):
 ## 3. NEXT STEPS (DIRECT PROMPTS)
 
 - [Prompt 1, DONE as `f33eab6`]: D2 implementation (bounds guard, rebuild, `--func`, validation vs fieldAverage1, runbook record) — see runbook "Phase D2".
-- [Prompt 2]: "Now implement error handling for the D2 objective path: fatal-error when `getTimeOpFuncVal`/`getdFScaling` is called with `primalFinalTimeIndex_==0` (primal not run), when `functionName` is not found (already fatal — verify), and when the `function` window is empty (`iEnd < iStart` → clear error instead of div-by-zero in DATimeOpAverage); guard `DAFunctionPatchMean` against `areaSum_==0`. Verify with one short run each for the failure cases."
-- [Prompt 3, later]: D3 sensitivity plan (design only, no ADR) → Prompt 4: D4 ADR audit → only on explicit user request rebuild ADR/ADF + FD-validate one short-window mean objective. Optional D2 follow-ups: dt-weighted `timeOp` for exact fieldAverage agreement; recompute-from-t0 on restart before any adjoint use. Do NOT commit unless the user explicitly asks.
+- [Prompt 2, DONE as `fef5cc5`]: error handling for the D2 objective path —
+  `primalFinalTimeIndex_ == 0` fatal in `getTimeOpFuncVal`/`getdFScaling`,
+  unknown-function fatal in `getTimeOpFuncVal` (existing one verified in
+  `getdFScaling`), empty-window guards in `DATimeOpAverage`/`Final`/`Max`,
+  `areaSum_ <= 0` fatal in `DAFunctionPatchMean`; five failure-case runs
+  verified (runbook "Phase D2 hardening"). Side finding: `"patches": []`
+  with `patchToFace` segfaults during `PYDAFOAM` init (unisolated, follow-up).
+- [Prompt 3 / D3, DONE]: plan in `DAContrailFoam_phaseD3_sensitivity_plan.md`
+  (control = jet velocity scale α in `0/U`, objective = `meanTOutlet`,
+  fixed dt 1e-5, Tier-1 [0.02, 0.06] s / Tier-2 [0.1, 0.3] s windows,
+  R1–R4 repeatability, G1–G7 acceptance, ≈8.6 h Tier-1 matrix).
+- [Prompt 4 / D4, DONE]: audit in `DAContrailFoam_phaseD4_adr_audit.md`
+  (non-smooth inventory, coded-BC runtime-compile blocker, reduceIO replay +
+  `getdFScaling` time-average path, build/test gates G1–G6, FD acceptance
+  1e-4 on the 0.012 s `meanTOutlet` window).
+- Next (execution, no design work pending): (a) run the D3 matrix — pilot →
+  R1 → Tier 1 → Tier 2; (b) on explicit request, ADR/ADF rebuild starting at
+  D4 gate G1 through G5. Optional D2 follow-ups: dt-weighted `timeOp`,
+  recompute-from-t0 on restart. Do NOT commit unless the user explicitly asks.

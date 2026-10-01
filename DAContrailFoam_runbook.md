@@ -216,32 +216,43 @@ Phases A–C of the validation plan are complete (details in the sections below)
   which found no BC defect (below). The remaining optional action is the
   end-of-run (0.3 s) and time-averaged-field comparison if a full-length run
   is wanted; Phase D has been authorized to start in parallel.
-- **Phase D — D1 complete, D2 implemented and validated (uncommitted).** D1
-  design in `DAContrailFoam_phaseD1_mean_objective_design.md`; D2 delivered the
+- **Phase D — D1/D2/D3/D4 documents complete; D2 + Prompt 2 code committed.**
+  Commits: `f33eab6` (D2 bounds guard + Phase A–D2 record), `fef5cc5`
+  (Prompt 2 fail-fast error handling, verified with five failure-case runs),
+  `dc28c07` (status docs). D1 design in
+  `DAContrailFoam_phaseD1_mean_objective_design.md`; D2 delivered the
   `functionTimeSteps_` bounds guard (`DASolver.C` `calcAllFunctions` store),
   the `--func` driver option that injects `meanTOutlet`, an original-mode
   rebuild with a clean log, and a 0.012 s validation run against `fieldAverage1`
   (`evalFunctions` 208.0155615012 K vs `TMean` outlet areaAverage
-  208.0159243 K — difference −1.74e-6 rel, entirely dt-weighting). Full write-up
-  in the **Phase D2** section below; session state in
-  `DAContrailFoam_session_handover.md`.
+  208.0159243 K — difference −1.74e-6 rel, entirely dt-weighting). D3 plan in
+  `DAContrailFoam_phaseD3_sensitivity_plan.md` (inlet jet velocity scale α,
+  fixed-dt FD protocol, R1–R4 checks, G1–G7 acceptance, costed run matrix);
+  D4 audit in `DAContrailFoam_phaseD4_adr_audit.md` (non-smooth inventory,
+  coded-BC blocker, replay/time-average requirements, G1–G6 build/test gates).
+  Session state in `DAContrailFoam_session_handover.md`.
 
 ## Recommended next step
 
 Phase D per `dafoam_contrailfoam_copilot_prompt_pack.md` (state in
 `DAContrailFoam_session_handover.md`, resume prompts in its §3):
 
-1. **D2 — done (see the Phase D2 section).** Bounds guard added and rebuilt
-   (clean log); `meanTOutlet` injected via `stage3_primal_compare.py --func`;
-   0.012 s validation vs `fieldAverage1` completed and the dt-weighting
-   difference quantified (−1.74e-6 rel). Remaining D2 follow-ups are optional:
-   a dt-weighted `timeOp` if exact agreement with `fieldAverage` is wanted,
-   and recompute-from-t0 on restart before any adjoint use.
-2. **D3** — one-control/one-objective sensitivity + identifiability plan
-   (no ADR).
-3. **D4** — ADR enablement audit (checklist + build/test plan); only then,
-   on explicit request, rebuild ADR/ADF and validate derivatives by finite
-   difference on one short-window mean objective.
+1. **D2 + Prompt 2 — done.** Bounds guard + fail-fast error handling
+   (`fef5cc5`), rebuilt clean, verified by five failure-case runs (see the
+   Phase D2 / Prompt 2 sections); `meanTOutlet` validated vs `fieldAverage1`
+   (−1.74e-6 rel, dt-weighting only). Optional D2 follow-ups: a dt-weighted
+   `timeOp` if exact `fieldAverage` agreement is wanted; recompute-from-t0 on
+   restart before any adjoint use.
+2. **D3 — plan done** (`DAContrailFoam_phaseD3_sensitivity_plan.md`).
+   Execution is the next *compute* step: pilot run (fixed dt = 1e-5, Co
+   check), R1 determinism gate, then the Tier-1 FD matrix (≈ 8.6 h serial),
+   report dJ/dα with CI under G1–G7. No solver code required (control = one
+   constant in `0/U`).
+3. **D4 — audit done** (`DAContrailFoam_phaseD4_adr_audit.md`). The
+   ADR/ADF rebuild remains gated on explicit request; when requested, start
+   at gate G1 (ADR compile + coded-BC runtime compile) and finish at G5
+   (FD validation of the 0.012 s `meanTOutlet` window) before any "ADR
+   support" claim.
 
 ## Files to watch
 
