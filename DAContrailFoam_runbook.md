@@ -652,6 +652,116 @@ guards above are reachable (none of them run during init; only the unchanged
 Recorded as a follow-up; the `areaSum_ == 0` case was therefore verified via
 `source: allCells` instead, which reaches `calcFunction` normally.
 
+## Phase D3 Tier-1 execution — run results (2026-10-01)
+
+Plan: `DAContrailFoam_phaseD3_sensitivity_plan.md` §5–§8. Executed in
+`dafoam-dev` under `/tmp/stage3/d3_*`; analysis script
+`scripts/d3_sensitivity_analysis.py` (`--dir`, `--t0`, `--t1`).
+
+### Configuration and deviations from the plan
+
+| parameter | plan §5 | executed | reason |
+|---|---|---|---|
+| mesh | 20/30/100 = 280,000 cells | **14/20/60 = 78,960 cells** (`generate_blockMeshDict.py`) | user-approved coarsening; 3.5× faster, identical for all runs (FD self-consistency unaffected) |
+| time step | fixed `deltaT 1e-5` | fixed **`deltaT 1.25e-5`** | Co-limited by the xy cell (3.86 mm): `max\|U\|`=97.07 → Co_max = **0.3146 ≤ 0.4**; 1.25e-5 divides both window boundaries exactly |
+| end time / window | 0.06 s, [0.02, 0.06] | unchanged | — |
+| `nStepsFrac` | 0.6667 | 0.6667 → **last 3200 of 4800 samples** (t = 0.0200125…0.06) | plan's 4000/6000 counts assumed dt = 1e-5; window bounds unchanged |
+| run set | J0 ×2, ±1 %, ±2 % | 6 matrix runs + `d3_j0s` (series cross-check) + `d3_t2p` probe to 0.15 s (diagnostic) | — |
+
+Rate ≈ 0.6 s/step with 6 runs contended (≈ 17–30 min/run vs 86 min planned);
+7 runs × ~600 MB fit the 8 GB Docker VM; no thermal warnings on the host
+throughout (battery ≈ 30.9 °C, load ≈ 10/10 during the runs).
+
+### J values (window [0.02, 0.06] s, `evalFunctions`, `primalFail = 0` everywhere)
+
+| case | α (m/s) | J (K) |
+|---|---|---|
+| `d3_j0a` | 96.4 | 208.1350321309 |
+| `d3_j0b` | 96.4 | 208.1350321309 (identical) |
+| `d3_j0s` | 96.4 | 208.1350321309 (identical; + FO) |
+| `d3_p01` | 97.364 (+1 %) | 208.1372536936 |
+| `d3_m01` | 95.436 (−1 %) | 208.1322759207 |
+| `d3_p02` | 98.328 (+2 %) | 208.1409050374 |
+| `d3_m02` | 94.472 (−2 %) | 208.1296164240 |
+
+### Gates (plan §8)
+
+| gate | result | evidence |
+|---|---|---|
+| G1 determinism | **PASS** | `j0a` vs `j0b` final fields bit-identical (`--mode cmp`, maxAbsDiff = 0 on all fields); window series `j0a == j0b == j0s` array-equal; J strings equal |
+| G2 dt sequence | **PASS** | identical `Time =` series, 4800 steps, all 7 runs |
+| G3 plumbing | **PASS** | offline window mean vs `evalFunctions`: rel **5.704e-13** (≤1e-9); sample count 3200 = T_win/dt exactly; `nStepsFrac 0.6667` matches window |
+| G4 stationarity | **FAIL** | half-means 208.0661450 / 208.2038084, diff **1.376e-01** vs σ_J = 4.834e-02 (calibrated z = 1.42) |
+| G5 SNR | **FAIL** | \|ΔJ\| = 4.978e-03 (h=0.01) and 1.129e-02 (h=0.02) vs threshold 5√2σ_J = **3.418e-01** |
+| G6 step-size | **FAIL** (formally, via G5) | raw slopes +0.2489 / +0.2822 per α̂ — same sign, dev 13.4 % (<25 %), but neither h is G5-valid |
+| G7 primal health | **PASS** | `primalFail=0` ×7, series finite, Co_max = 0.3146 ≤ 0.4 |
+
+Window statistics (baseline, [0.02, 0.06], N = 3200): σ_inst = 9.083e-02 K,
+τ_int = 5.67 ms, σ_J = 4.834e-02 K.
+
+FD table (plan window, with 95 % CI from plan §7 — CI dominated by the
+non-stationarity-inflated σ_J, hence not interpretable):
+
+| h | dJ/d(α̂) | dJ/dα (K per m/s) | curvature C |
+|---|---|---|---|
+| 0.01 | +0.2489 ± 6.701 | +0.002582 ± 0.0695 | −5.346 K |
+| 0.02 | +0.2822 ± 3.351 | +0.002928 ± 0.0348 | +1.143 K |
+
+### Diagnosis (why G4–G6 failed)
+
+5 ms bin means of the baseline series: flat **plateau 208.026 K for
+t = 0.005–0.030** (acoustic equilibration only), then the plume-arrival ramp
+208.026 → 208.34 through the end of the run — the run stops *during* arrival,
+so the window is dominated by drift, which inflates σ_inst/τ_int/σ_J ~100×.
+
+Diagnostic probe `d3_t2p` (identical baseline, endTime 0.15, 12000 steps,
+`primalFail=0`, J = 208.3224566202 over [0, 0.15]): arrival peaks near
+t ≈ 0.065, then the outlet mean oscillates with **period ≈ 0.07 s** (crests at
+0.065 / 0.135) on a slow residual rise (208.47 → 208.65). Every trailing window
+≤ 0.15 still fails G4 (z = 1.15–1.58). σ_inst ≈ 0.1 K, τ_int ≈ 5–10 ms →
+projection for the plan's Tier-2 window [0.1, 0.3]: σ_J ≈ 0.028 K →
+5√2σ_J ≈ 0.2 K, i.e. an order of magnitude above the ΔJ differences measured
+here — identifiability at that window length is **not guaranteed** and must be
+re-measured, not assumed.
+
+### Secondary evidence: pre-arrival plateau FD, window [0.01, 0.03]
+
+Recorded only as a consistency check of the FD machinery (the outlet has not
+yet seen the developed plume — not a substitute for the planned sensitivity):
+
+- σ_inst = 2.151e-04 K, τ_int = 0.565 ms, σ_J = 5.111e-05 K; half-diff
+  6.0e-05 → literal G4 fails but calibrated z = 0.59 (stationary within noise);
+  SNR gate passes for both h (threshold 3.61e-04).
+- slopes: **+0.028061** (h=0.01) vs **+0.028074** (h=0.02) per α̂ — dev
+  **0.048 %**, same sign; curvatures −0.0036 / −0.0098 K (≈ 0);
+  dJ/dα ≈ **+2.91e-04 K per m/s**.
+
+### Verdict and next steps
+
+- Tier-1 executed and recorded per plan rules: **G1/G2/G3/G7 pass** (platform
+  is bit-reproducible, objective plumbing exact, runs healthy);
+  **G4/G5/G6 fail** → per plan §6/§8 the sensitivity in [0.02, 0.06] is
+  reported as **not identifiable at this window length** (no gradient claim).
+- Escalation path per plan ("move t0 later / widen the window"): Tier-2
+  window [0.1, 0.3] at endTime 0.3 (24000 steps, `nStepsFrac` 0.6667 still
+  exact). **Deferred by user decision 2026-10-01** (stop at Tier-1).
+
+### Method notes
+
+- Every run logs the per-step objective (`meanTOutlet: <inst> average: <run>`
+  lines, 4800 of them) → any trailing window's J is computable offline for
+  every run; validated against `evalFunctions` to 5.7e-13. The extra
+  `surfaceFieldValue` FO in `d3_j0s` writes a single appending `.dat`
+  (needs `name <patch>;` — OF-2506 rejects the older `patch`/`patches`
+  selection keys) and matches the log series to text precision (5e-8).
+- G4's literal `< 1σ_J` threshold is conservative: for stationary data the
+  half-difference has σ = 2σ_J, so ~68 % of stationary windows fail it; the
+  analysis script therefore also reports z = halfdiff/(2σ_J).
+- Adjoint status (corrects the prompt pack): `libDASolverADR.so` (Sep 21)
+  **does** contain 28 `DAContrailFoam` symbols but predates the D2/Prompt-2
+  edits; `libDASolverADF.so` (Sep 15) has **none**. Adjoint functionality
+  remains unavailable until a joint ADR/ADF rebuild (still gated).
+
 ## Notes
 
 The implementation should stay intentionally narrow and reviewable. The first milestone is not a full DAFoam contrail solver; it is the reduced gas-phase path that matches the validated CASSANDRA no-PBE physics.

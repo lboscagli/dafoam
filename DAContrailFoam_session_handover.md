@@ -1,4 +1,4 @@
-# Session Handover — 2026-10-01 (Phase C closed, Phase D design docs D1–D4 done, D2+Prompt2 code committed)
+# Session Handover — 2026-10-01 (Phase C closed, D1–D4 done, D3 Tier-1 executed and recorded)
 
 ## 1. ARCHITECTURAL STATE
 
@@ -11,9 +11,10 @@ species O2/N2/CO2/H2O, 280k cells) as `DAContrailFoam` in original mode only
 /workspace/src/cassandra/dafoam_env_doc/load_cassandra_dafoam_env.sh`).
 Phases A–C closed (primal validated at engineering level); Phase D: D1 design,
 D2 implementation + validation, Prompt 2 error hardening (verified by five
-failure-case runs), D3 sensitivity plan and D4 ADR audit all delivered —
-**no design work pending**; remaining is execution (D3 run matrix; ADR/ADF
-rebuild + FD validation on explicit request).
+failure-case runs), D3 sensitivity plan, D4 ADR audit, and **D3 Tier-1
+execution** all delivered (results + gates in runbook "Phase D3 Tier-1
+execution"); remaining: Tier-2 window [0.1, 0.3] (deferred by user decision
+2026-10-01) and ADR/ADF rebuild + FD validation on explicit request.
 
 ## 2. CURRENT CODE (ESSENTIAL SNAPSHOT ONLY)
 
@@ -68,7 +69,22 @@ D2 recon findings (existing machinery — no new classes needed):
   (non-smooth inventory, coded-BC runtime-compile blocker, reduceIO replay +
   `getdFScaling` time-average path, build/test gates G1–G6, FD acceptance
   1e-4 on the 0.012 s `meanTOutlet` window).
-- Next (execution, no design work pending): (a) run the D3 matrix — pilot →
-  R1 → Tier 1 → Tier 2; (b) on explicit request, ADR/ADF rebuild starting at
-  D4 gate G1 through G5. Optional D2 follow-ups: dt-weighted `timeOp`,
-  recompute-from-t0 on restart. Do NOT commit unless the user explicitly asks.
+- [D3 Tier-1, DONE 2026-10-01]: run matrix executed on a user-approved
+  coarse mesh (14/20/60 = 78,960 cells, dt 1.25e-5, 4800 steps, window
+  [0.02, 0.06] = last 3200 samples, `nStepsFrac` 0.6667; 6 matrix runs +
+  series cross-check run + 0.15 s diagnostic probe). Verdict: G1/G2/G3/G7
+  PASS (bit-identical determinism, plumbing 5.7e-13, Co 0.3146, all
+  `primalFail=0`); G4/G5/G6 FAIL — window is non-stationary (plume arrival
+  ramp + ~0.07 s outlet oscillation), so per plan the sensitivity in this
+  window is reported **not identifiable at this window length**; no gradient
+  claim. Secondary plateau FD [0.01, 0.03]: slopes 0.028061/0.028074 agree
+  to 0.048 %, dJ/dα ≈ +2.91e-04 K per m/s. Full record: runbook "Phase D3
+  Tier-1 execution"; analysis: `work/scripts/d3_sensitivity_analysis.py`.
+- Next: (a) optional Tier-2 [0.1, 0.3] on explicit request (endTime 0.3,
+  24000 steps, same `nStepsFrac`; expect ~4 h contended; σ_J projection
+  0.028 K → G5 may still fail — re-measure, don't assume); (b) on explicit
+  request, ADR/ADF rebuild starting at D4 gate G1 through G5 (note:
+  `libDASolverADR.so` has 28 `DAContrailFoam` symbols but predates the
+  D2/Prompt-2 edits; `libDASolverADF.so` has none — joint rebuild required).
+  Optional D2 follow-ups: dt-weighted `timeOp`, recompute-from-t0 on restart.
+  Do NOT commit unless the user explicitly asks.

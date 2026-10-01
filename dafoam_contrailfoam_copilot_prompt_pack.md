@@ -72,10 +72,14 @@ Progress log (last updated after Phase C validation and the outlet-BC investigat
   costed two-tier run matrix; **D4 audit**
   (`DAContrailFoam_phaseD4_adr_audit.md`): non-smooth inventory, coded-BC
   blocker, checkpoint/replay + time-average requirements, gates G1–G6.
-  Remaining work is *execution*, not design: run the D3 matrix; on explicit
-  request rebuild ADR/ADF starting at D4 gate G1 with acceptance at G5.
+  **D3 Tier-1 executed 2026-10-01** (runbook "Phase D3 Tier-1 execution",
+  coarse mesh 78,960 cells / dt 1.25e-5): G1/G2/G3/G7 PASS; G4–G6 FAIL —
+  window non-stationary (plume arrival + ~0.07 s oscillation) → sensitivity
+  **not identifiable at this window length**, no gradient claim; Tier-2
+  [0.1, 0.3] deferred by user decision. Remaining work: optional Tier-2; on
+  explicit request rebuild ADR/ADF starting at D4 gate G1 with acceptance at G5.
   Session state + resume prompts: `DAContrailFoam_session_handover.md`.
-- ADR/ADF: AD libs are stale (`libDASolverADR.so` Sep 21, `libDASolverADF.so` Sep 15, no `DAContrailFoam`); the D4 audit is written (`DAContrailFoam_phaseD4_adr_audit.md`) — rebuild only when explicitly requested, then gates G1→G5 apply (no "ADR support" claim before G5).
+- ADR/ADF: AD libs are stale (`libDASolverADR.so` Sep 21 — has 28 `DAContrailFoam` symbols but predates the D2/Prompt-2 edits; `libDASolverADF.so` Sep 15 — **no** `DAContrailFoam`); the D4 audit is written (`DAContrailFoam_phaseD4_adr_audit.md`) — rebuild only when explicitly requested (joint ADR+ADF), then gates G1→G5 apply (no "ADR support" claim before G5).
 - `reduceIO` intermediate writes omit `N2`, `nut`, `alphat`, `rho` (and `uniform/time`); comparison scripts must not expect them in intermediate time dirs.
 - `DAField.C:1137` hard-codes `turbDict.subDict("RAS")` — dormant because default `primalBC = {}` (fires only with `useWallFunction`), but must be generalized before wall-function LES use.
 - aerosol/PBE physics (Phase E, intentionally deferred)
