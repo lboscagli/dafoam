@@ -1,3 +1,129 @@
+# Session Handover — 2026-10-02 (Phase D4: ADR divergence root-caused and fixed; G1/G2/G3 PASS)
+
+> Read **`DAContrailFoam_runbook.md` → "Phase D4"** for the full evidence and
+> the restart commands; this file is the short-form state. The gate
+> definitions are in **`DAContrailFoam_phaseD4_adr_audit.md` §9** (line ~179):
+> G1 line 181, G2 line 185 (≤1e-10 residual parity), G3 line 189, G4 line 195,
+> **G5 line 199 (the acceptance gate)**, G6 record. **No "ADR support" claim
+> may be made until G5 passes.**
+
+## 1. THE BLOCKER WAS FOUND AND REMOVED (root cause #6)
+
+The ADR build linked fine but **every ADR primal diverged**, while the ADF
+primal ran. The environment, the physics/assembly and the preconditioners
+were all ruled out first (identity preconditioner also diverged → not DILU;
+`initRes` matched at 16 digits → assembly is correct; ADR-only process with
+the union env still failed → not env interposition).
+
+Real cause: OpenFOAM's generic `gSumProd` (`Field/FieldFunctions.C:488`)
+implements `sumProd` with `operator&&` — correct "dotdot" for vectors, but a
+**logical-AND count** for scalars. `double`/`float` mask this because
+`scalarField.{H,C}` provides `*`-based specializations for them; the codi
+`scalar` (`codi::ActiveType`) had **none**, so every BiCG/BiCGStab/CG
+`alpha`/`omega` became garbage → divergence of all BiCGStab solvers (the
+`smoothSolver`/`GAMG` paths only use unary norms and are immune, which is
+what hid it for so long).
+
+**Fix (option B — source patch, approved):** add `sumProd` specializations
+for the codi scalar in `scalarField.H` (declaration) + `scalarField.C`
+(definition). The declaration is mandatory: `Field.H` includes
+`FieldFunctions.C`, so consumers inline the generic and, pre-fix, there was
+no symbol left for LD_PRELOAD to interpose.
+
+**Both AD libs rebuilt and verified**, so ADR *and* ADF now carry the fix:
+
+| lib | size | NEEDED | symbol check |
+|---|---|---|---|
+| `libOpenFOAMADR.so` | 24 933 632 B | `libPstreamADR.so` | 1 defined `sumProd<codi::ActiveType>`, 0 undefined |
+| `libOpenFOAMADF.so` | 19 944 920 B | `libPstreamADF.so` | same |
+
+Pre-fix backups: `/workspace/logs/backups/libOpenFOAM{ADR,ADF}.so.pre-sumProd-fix-*`.
+Patched files (backups `*.orig-d4`): `scalarField.{H,C}`,
+`src/OpenFOAM/Make/options` (`-lPstream` → `-lPstream$(WM_AD_MODE)` — the
+image ships only the suffixed `libPstream{ADR,ADF}.so`), plus the earlier
+`codedFixedValue`/`codedMixed` and functionObject `$(WM_AD_MODE)` patches.
+Build logs: `logs/libOpenFOAM-ADR-relink.log`, `logs/libOpenFOAM-ADF-rebuild.log`,
+`logs/libOpenFOAM-ADR-rebuild.log` (first attempt, failed at `-lPstream`).
+
+**Build gotchas learned (both bite again):**
+- `wmake` usage is `wmake [OPTION] [dir]` → **`wmake -j2 libso`**, not
+  `wmake libso -j2`.
+- Touching any `Make/options` regenerates the makefiles → **full 601-object
+  libOpenFOAM recompile (~18 min at -j2)**, not a relink. Objects live under
+  `OpenFOAM-AD/build/<WM_OPTIONS>/src/...`, **not** `platforms/`.
+- `Make/files` has no AD suffix → wmake emits `libOpenFOAM.so`, which must be
+  **renamed** to `libOpenFOAM{ADR,ADF}.so` (no SONAME; consumers' DT_NEEDED
+  are the suffixed names).
+
+## 2. GATES
+
+| gate | result |
+|---|---|
+| **G1** ADR init + coded-BC compile + 100-step ADR primal | **PASS** — `primalFail=0`, elapsed 216.4 s, 0 singularity/NaN, fresh `dynamicCode` (9 coded BCs + `turbulenceScales_dynamicKEqn` + `fieldAverage1`), pristine DILU case. Log `logs/g1_gate_official.log` |
+| **G2** residual parity original-env vs ADR-env | **PASS, bitwise identical** — 950 516 residuals, `norm2=5205369.2529319227`, `absmax=1400533.6289946034`, `max_abs_diff=0`, `elements differing: 0/950516`. Logs `logs/g2_residual_{orig,adr}.log` + `logs/g2_compare.log`, dumps `g2_residuals_{orig,adr}.npy` |
+| **G3** checkpoint/replay integrity | **PASS** — 101 checkpoints (`0`…`0.00125`), `getdFScaling` nonzero exactly at indices 50..99 all `0.02=1/50` and 0 elsewhere, `primalFinalTimeIndex_` valid (Prompt-2 fatal did not fire), replayed states vary, final-state round trip **abs 5.46e-12 / rel 3.35e-16**. Log `logs/g3_replay.log`, `logs/g3_primal_final.npy` |
+
+G2 methodology note: use `getResiduals(double*)` (`DASolver.C:1238`) — it
+returns full-precision doubles. `calcPrimalResidualStatistics("print")` prints
+only 6 significant digits and **cannot** be used for a ≤1e-10 gate.
+
+G3 case changes (both required): `writeControl timeStep; writeInterval 1`
+(the write sits *inside* the time loop and `writeAdjStates` is gated by
+`runTime.writeTime()`, so the inherited `adjustableRunTime/0.00125` produced
+exactly one time dir — no checkpoint set existed) and `writePrecision 16`
+(the case ships 10; the ≤1e-12 round-trip bar is unreachable at 10 digits).
+
+## 3. FINDING THAT BLOCKS G4/G5 — `0/` is missing `phi`
+
+`readStateVars` `MUST_READ`s every state, and the first three steps need
+time levels at/before t=0, which only exist in the hand-provided `0/` folder
+(the solver never writes time 0). Observed fatal:
+`cannot find file "/tmp/stage3/d4_g3/0/phi"`. DAFoam's own `mphys`
+`readZeroFields` path calls `readStateVars(0.0, deltaT)` before every primal
+(`mphys_dafoam.py:1487`), so **the unsteady adjoint cannot run on these
+cases until `0/` holds every state field (at least `phi`)**. There is no
+Python write API to fix it from the outside. G3 therefore replays the 98
+checkpoints whose `t-2·dt` is also a checkpoint (t ≥ 3·dt).
+
+Fix: `cp /tmp/stage3/d4_g3/0.00125/phi <case>/0/`, re-run G3, and require
+`0/ missing state fields: []`.
+
+## 4. WHERE EVERYTHING LIVES
+
+- Repo: `~/dafoam-source-docker/work/src/dafoam` (git root; branch
+  `feature/contrailfoam-primal-wrapper`; `origin = lboscagli/dafoam`,
+  `upstream = mdolab/dafoam`).
+- **Gate scripts are now committed under `d4_gate_scripts/`** (the originals
+  in the host `work/scripts/` are what the container sees as
+  `/workspace/scripts` — edit the host copies, then re-copy).
+- Runbook: `DAContrailFoam_runbook.md` (Phase D4 section has the full
+  evidence tables, root-cause #6 write-up, restart commands, gotchas).
+- Audit / gate definitions: `DAContrailFoam_phaseD4_adr_audit.md` (§6 line 93
+  = checkpoint mechanism, §7 = non-smooth inventory, §9 line 179 = gates).
+- Cases are **container-local** (`/tmp/stage3/{d4_g1,d4_g3,d3_base}`) and are
+  lost if the container is recreated; the runbook documents how to rebuild
+  `d4_g1`.
+- Logs: host `work/logs/` (= `/workspace/logs` in the container).
+
+## 5. NEXT STEPS (in order)
+
+1. **Fix `0/`** on the G4/G5 case (see §3) — everything downstream depends on it.
+2. **G4** — short-window `meanTOutlet` derivative for an existing
+   differentiable input, plus instrument audit §7's non-smooth inventory for
+   activity in that window (known candidates: `Y.clamp_min` at
+   `YEqnContrail.H:39,46`, `max(KK,0)` at `DADynamicKEqn.C:32`).
+3. **G5 (acceptance)** — fixed-dt window `endTime 0.012`, objective
+   `meanTOutlet`, control = jet velocity scale α, central difference with
+   h ∈ {0.005, 0.01, 0.02}, `|dJ/dα|_AD − |dJ/dα|_FD| / |dJ/dα|_FD ≤ 1e-4`
+   under D3's R1–R4. **Only after this may "ADR support" be claimed.**
+4. **G6** — record G1–G5 evidence, flip the prompt-pack ADR/ADF bullets to
+   verified.
+
+Known-but-unreachable gaps (none affect the current cases): AD-tree
+`codeStream.C:174`, `CodedFunction1.C:133`,
+`codedFixedValuePointPatchField.C:119` (→libOpenFOAM) and `CodedField.C:135`
+(→libmeshTools) still have unsuffixed lib references.
+
 # Session Handover — 2026-10-01 (Phase C closed, D1–D4 done, D3 Tier-1 executed and recorded)
 
 ## 1. ARCHITECTURAL STATE
